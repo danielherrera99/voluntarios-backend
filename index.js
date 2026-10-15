@@ -145,4 +145,12 @@ app.listen(PORT, () => {
     console.log(`🔄 [Auto-Sync] Verificando nuevas inscripciones en Google Sheets...`);
     syncFase2Data().catch(err => console.error('❌ Error en Auto-Sync:', err.message));
   }, 5 * 60 * 1000);
+
+  // Keep-Alive cada 10 minutos para evitar que Render entre en suspensión (Cold Start)
+  const BACKEND_URL = process.env.RENDER_EXTERNAL_URL || 'https://voluntarios-backend.onrender.com';
+  setInterval(() => {
+    fetch(BACKEND_URL)
+      .then(res => console.log(`💓 [Keep-Alive] Ping exitoso a ${BACKEND_URL} (${res.status})`))
+      .catch(err => console.warn('⚠️ [Keep-Alive] Falló el ping:', err.message));
+  }, 10 * 60 * 1000);
 });
