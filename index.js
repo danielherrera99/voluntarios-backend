@@ -34,6 +34,23 @@ app.get('/api/voluntarios', async (req, res) => {
   }
 });
 
+// Consultar padrón general por DNI (Fase 1)
+app.get('/api/voluntarios-general/:dni', async (req, res) => {
+  try {
+    const { dni } = req.params;
+    const { data, error } = await supabase
+      .from('voluntarios_general')
+      .select('*')
+      .eq('dni', dni)
+      .maybeSingle();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en el puerto ${PORT}`);
