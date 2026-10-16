@@ -232,6 +232,23 @@ async function syncFase2Data() {
   console.log(`🔍 Postulantes en REVISIÓN/OBSERVADOS: ${rowsToUpsert.filter(r => r.estado === 'EN REVISIÓN').length}`);
   console.log(`⏳ Postulantes PENDIENTES: ${rowsToUpsert.filter(r => r.estado === 'PENDIENTE').length}\n`);
 
+  // Cruce y actualización en la tabla 'voluntarios_general' (Fase 1)
+  console.log(`🔄 Actualizando estado de Fase 2 en 'voluntarios_general' (Fase 1)...`);
+  try {
+    const f2Dnis = rowsToUpsert.map(r => r.dni);
+    // 1. Resetear todos los que no estén en SIN_FASE2
+    await supabase.from('voluntarios_general').update({ estado: 'SIN_FASE2', fase: '1' }).neq('estado', 'SIN_FASE2');
+    
+    // 2. Marcar en lotes de 500 los que sí enviaron Fase 2
+    for (let i = 0; i < f2Dnis.length; i += 500) {
+      const chunk = f2Dnis.slice(i, i + 500);
+      await supabase.from('voluntarios_general').update({ estado: 'CON_FASE2', fase: '2' }).in('dni', chunk);
+    }
+    console.log(`✅ Cruce con 'voluntarios_general' completado.`);
+  } catch (errSync) {
+    console.warn(`⚠️ Error actualizando estado en voluntarios_general:`, errSync.message);
+  }
+
   return {
     success: true,
     total: totalSaved,
