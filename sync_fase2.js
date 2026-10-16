@@ -152,6 +152,7 @@ async function syncFase2Data() {
     const valStr = String(r['VALIDADO'] || '').trim().toUpperCase();
     const isApproved = valStr === 'SI' || valStr === 'SÍ';
     const isVerificar = valStr.includes('VERIFICAR');
+    const isRejected = valStr === 'NO' || valStr.startsWith('NO') || valStr.includes('RECHAZ');
 
     let estado = 'PENDIENTE';
     let fase = '2';
@@ -159,6 +160,9 @@ async function syncFase2Data() {
     if (isApproved) {
       estado = 'SELECCIONADO';
       fase = '3';
+    } else if (isRejected) {
+      estado = 'NO SELECCIONADO';
+      fase = '2';
     } else if (isVerificar) {
       estado = 'EN REVISIÓN';
       fase = '2';
