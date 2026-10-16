@@ -135,6 +135,131 @@ app.get('/api/consulta/:dni', async (req, res) => {
   }
 });
 
+// Endpoint para repartir equitativamente los postulantes de Fase 1 entre colaboradores
+app.post('/api/distribute-voluntarios', async (req, res) => {
+  try {
+    const { collaborators } = req.body;
+    if (!collaborators || !Array.isArray(collaborators) || collaborators.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar una lista de colaboradores' });
+    }
+
+    const cleanNames = collaborators.map(c => String(c).trim()).filter(Boolean);
+    if (cleanNames.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron nombres válidos' });
+    }
+
+    console.log(`⚡ Iniciando reparto equitativo entre ${cleanNames.length} colaboradores:`, cleanNames);
+
+    // 1. Obtener todos los IDs de los postulantes que no han completado Fase 2
+    let allIds = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from('voluntarios_general')
+        .select('id')
+        .or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO')
+        .order('nombres_apellidos', { ascending: true })
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allIds.push(...data.map(d => d.id));
+      if (data.length < size) break;
+      page++;
+    }
+
+    const total = allIds.length;
+    const numCollaborators = cleanNames.length;
+    const chunkSize = Math.ceil(total / numCollaborators);
+
+    console.log(`📊 Total a repartir: ${total} (~${chunkSize} por persona)`);
+
+    const distributionSummary = [];
+
+    for (let i = 0; i < numCollaborators; i++) {
+      const collaboratorName = cleanNames[i];
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, total);
+      const collaboratorIds = allIds.slice(start, end);
+
+      if (collaboratorIds.length > 0) {
+        // Actualizar en lotes de 500
+        for (let j = 0; j < collaboratorIds.length; j += 500) {
+          const subChunk = collaboratorIds.slice(j, j + 500);
+          const { error: upErr } = await supabase
+            .from('voluntarios_general')
+            .update({ fase: collaboratorName })
+            .in('id', subChunk);
+
+          if (upErr) console.warn(`⚠️ Error asignando a ${collaboratorName}:`, upErr.message);
+        }
+
+        distributionSummary.push({
+          name: collaboratorName,
+          count: collaboratorIds.length
+        });
+      }
+    }
+
+    console.log('✅ Reparto completado con éxito:', distributionSummary);
+
+    res.json({
+      success: true,
+      total,
+      collaborators: distributionSummary
+    });
+  } catch (err) {
+    console.error('❌ Error en distribute-voluntarios:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para obtener estadísticas y avance por colaborador
+app.get('/api/collaborators-stats', async (req, res) => {
+  try {
+    let allRows = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from('voluntarios_general')
+        .select('fase, estado')
+        .or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO')
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows.push(...data);
+      if (data.length < size) break;
+      page++;
+    }
+
+    const statsMap = {};
+    for (const r of allRows) {
+      const name = (r.fase && r.fase !== '1' && r.fase !== '2') ? r.fase : 'Sin asignar';
+      if (!statsMap[name]) {
+        statsMap[name] = { name, total: 0, contactados: 0, pendientes: 0 };
+      }
+      statsMap[name].total++;
+      if (r.estado === 'CONTACTADO') {
+        statsMap[name].contactados++;
+      } else {
+        statsMap[name].pendientes++;
+      }
+    }
+
+    const result = Object.values(statsMap).map(s => ({
+      ...s,
+      porcentaje: s.total > 0 ? Math.round((s.contactados / s.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en el puerto ${PORT}`);
