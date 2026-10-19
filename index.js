@@ -215,8 +215,193 @@ app.post('/api/distribute-voluntarios', async (req, res) => {
   }
 });
 
-// Endpoint para obtener estadísticas y avance por colaborador
-app.get('/api/collaborators-stats', async (req, res) => {
+// Endpoint para chocolotear / repartir equitativamente entre Líderes y Cuadrillas
+app.post('/api/distribute-cuadrillas', async (req, res) => {
+  try {
+    const { hierarchy, shuffle = true, targetFase = 'sin_fase2' } = req.body;
+    // hierarchy es un array de líderes:
+    // [ { nombre: 'Líder 1', coordinadores: ['Coord 1A', 'Coord 1B'] }, ... ]
+    if (!hierarchy || !Array.isArray(hierarchy) || hierarchy.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar la estructura de líderes y coordinadores' });
+    }
+
+    console.log(`🎲 Iniciando chocoloteo / reparto de cuadrillas entre ${hierarchy.length} líderes...`);
+
+    // 1. Obtener los IDs de los postulantes según el target
+    let query = supabase.from('voluntarios_general').select('id, dni');
+    if (targetFase === 'sin_fase2') {
+      query = query.or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO');
+    }
+    
+    let allVoluntarios = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await query
+        .order('nombres_apellidos', { ascending: true })
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allVoluntarios.push(...data);
+      if (data.length < size) break;
+      page++;
+    }
+
+    const total = allVoluntarios.length;
+    if (total === 0) {
+      return res.status(400).json({ error: 'No se encontraron voluntarios para repartir' });
+    }
+
+    // 2. Si shuffle es true, aplicamos Fisher-Yates ("Chocoloteado aleatorio")
+    let pool = [...allVoluntarios];
+    if (shuffle) {
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+    }
+
+    // 3. Contar número total de cuadrillas / coordinadores en toda la jerarquía
+    let totalCoordinadores = 0;
+    hierarchy.forEach(l => {
+      const coords = l.coordinadores && l.coordinadores.length > 0 ? l.coordinadores : [l.nombre];
+      totalCoordinadores += coords.length;
+    });
+
+    const chunkSize = Math.ceil(total / totalCoordinadores);
+    console.log(`📊 Total a repartir: ${total} entre ${totalCoordinadores} coordinadores (~${chunkSize} c/u)`);
+
+    let currentIndex = 0;
+    const summary = [];
+
+    for (let lIdx = 0; lIdx < hierarchy.length; lIdx++) {
+      const lider = hierarchy[lIdx];
+      const liderNombre = String(lider.nombre).trim();
+      const coords = (lider.coordinadores && lider.coordinadores.length > 0) 
+        ? lider.coordinadores.map(c => String(c).trim()).filter(Boolean)
+        : [liderNombre];
+
+      const liderSummary = {
+        lider: liderNombre,
+        coordinadores: [],
+        totalLider: 0
+      };
+
+      for (let cIdx = 0; cIdx < coords.length; cIdx++) {
+        const coordNombre = coords[cIdx];
+        const cuadrillaCode = `L${String(lIdx + 1).padStart(2, '0')}-C${String(cIdx + 1).padStart(2, '0')}`;
+        const start = currentIndex;
+        const end = Math.min(start + chunkSize, total);
+        const chunk = pool.slice(start, end);
+        currentIndex = end;
+
+        if (chunk.length > 0) {
+          const ids = chunk.map(v => v.id);
+          const dnis = chunk.map(v => v.dni);
+
+          // Actualizar en lotes de 500 en voluntarios_general
+          for (let b = 0; b < ids.length; b += 500) {
+            const subIds = ids.slice(b, b + 500);
+            const { error: upErr } = await supabase
+              .from('voluntarios_general')
+              .update({
+                lider_nombre: liderNombre,
+                coordinador_nombre: coordNombre,
+                cuadrilla_codigo: cuadrillaCode
+              })
+              .in('id', subIds);
+
+            if (upErr) console.warn(`⚠️ Error asignando lote a ${coordNombre}:`, upErr.message);
+          }
+
+          // Actualizar en voluntarios (Fase 2) si existen
+          for (let b = 0; b < dnis.length; b += 500) {
+            const subDnis = dnis.slice(b, b + 500);
+            await supabase
+              .from('voluntarios')
+              .update({
+                lider_nombre: liderNombre,
+                coordinador_nombre: coordNombre,
+                cuadrilla_codigo: cuadrillaCode
+              })
+              .in('dni', subDnis);
+          }
+
+          liderSummary.coordinadores.push({
+            coordinador: coordNombre,
+            cuadrilla: cuadrillaCode,
+            count: chunk.length
+          });
+          liderSummary.totalLider += chunk.length;
+        }
+
+        if (currentIndex >= total) break;
+      }
+
+      summary.push(liderSummary);
+      if (currentIndex >= total) break;
+    }
+
+    console.log('✅ Chocoloteo y reparto de cuadrillas finalizado con éxito.');
+
+    res.json({
+      success: true,
+      total,
+      summary
+    });
+  } catch (err) {
+    console.error('❌ Error en distribute-cuadrillas:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para asignación manual o en bloque de cuadrilla
+app.post('/api/asignar-cuadrilla', async (req, res) => {
+  try {
+    const { ids, lider_nombre, coordinador_nombre, cuadrilla_codigo } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar al menos un ID' });
+    }
+
+    const { error: upErr } = await supabase
+      .from('voluntarios_general')
+      .update({
+        lider_nombre: lider_nombre || null,
+        coordinador_nombre: coordinador_nombre || null,
+        cuadrilla_codigo: cuadrilla_codigo || null
+      })
+      .in('id', ids);
+
+    if (upErr) throw upErr;
+
+    // Obtener DNIs para sincronizar también en Fase 2
+    const { data: volData } = await supabase
+      .from('voluntarios_general')
+      .select('dni')
+      .in('id', ids);
+
+    if (volData && volData.length > 0) {
+      const dnis = volData.map(v => v.dni);
+      await supabase
+        .from('voluntarios')
+        .update({
+          lider_nombre: lider_nombre || null,
+          coordinador_nombre: coordinador_nombre || null,
+          cuadrilla_codigo: cuadrilla_codigo || null
+        })
+        .in('dni', dnis);
+    }
+
+    res.json({ success: true, count: ids.length });
+  } catch (err) {
+    console.error('❌ Error en asignar-cuadrilla:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para obtener estadísticas y avance por Líder y Coordinador
+app.get('/api/cuadrillas-stats', async (req, res) => {
   try {
     let allRows = [];
     let page = 0;
@@ -224,8 +409,7 @@ app.get('/api/collaborators-stats', async (req, res) => {
     while (true) {
       const { data, error } = await supabase
         .from('voluntarios_general')
-        .select('fase, estado')
-        .or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO')
+        .select('lider_nombre, coordinador_nombre, cuadrilla_codigo, estado')
         .range(page * size, (page + 1) * size - 1);
 
       if (error) throw error;
@@ -235,26 +419,103 @@ app.get('/api/collaborators-stats', async (req, res) => {
       page++;
     }
 
-    const statsMap = {};
+    const lideresMap = {};
+
     for (const r of allRows) {
-      const name = (r.fase && r.fase !== '1' && r.fase !== '2') ? r.fase : 'Sin asignar';
-      if (!statsMap[name]) {
-        statsMap[name] = { name, total: 0, contactados: 0, pendientes: 0 };
+      const lider = r.lider_nombre || 'Sin Líder Asignado';
+      const coord = r.coordinador_nombre || 'Sin Coordinador';
+      const cuadrilla = r.cuadrilla_codigo || '-';
+
+      if (!lideresMap[lider]) {
+        lideresMap[lider] = {
+          nombre: lider,
+          total: 0,
+          contactados: 0,
+          pendientes: 0,
+          coordinadoresMap: {}
+        };
       }
-      statsMap[name].total++;
-      if (r.estado === 'CONTACTADO') {
-        statsMap[name].contactados++;
+
+      lideresMap[lider].total++;
+      const isContacted = (r.estado === 'CONTACTADO' || r.estado === 'CON_FASE2');
+      if (isContacted) {
+        lideresMap[lider].contactados++;
       } else {
-        statsMap[name].pendientes++;
+        lideresMap[lider].pendientes++;
+      }
+
+      if (!lideresMap[lider].coordinadoresMap[coord]) {
+        lideresMap[lider].coordinadoresMap[coord] = {
+          nombre: coord,
+          cuadrilla: cuadrilla,
+          total: 0,
+          contactados: 0,
+          pendientes: 0
+        };
+      }
+
+      lideresMap[lider].coordinadoresMap[coord].total++;
+      if (isContacted) {
+        lideresMap[lider].coordinadoresMap[coord].contactados++;
+      } else {
+        lideresMap[lider].coordinadoresMap[coord].pendientes++;
       }
     }
 
-    const result = Object.values(statsMap).map(s => ({
-      ...s,
-      porcentaje: s.total > 0 ? Math.round((s.contactados / s.total) * 100) : 0
-    })).sort((a, b) => b.total - a.total);
+    const result = Object.values(lideresMap).map(l => {
+      const coordinadores = Object.values(l.coordinadoresMap).map(c => ({
+        ...c,
+        porcentaje: c.total > 0 ? Math.round((c.contactados / c.total) * 100) : 0
+      })).sort((a, b) => b.total - a.total);
+
+      delete l.coordinadoresMap;
+      return {
+        ...l,
+        porcentaje: l.total > 0 ? Math.round((l.contactados / l.total) * 100) : 0,
+        coordinadores
+      };
+    }).sort((a, b) => b.total - a.total);
 
     res.json(result);
+  } catch (err) {
+    console.error('❌ Error en cuadrillas-stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para obtener lista única de Líderes y Coordinadores asignados
+app.get('/api/lideres-coordinadores', async (req, res) => {
+  try {
+    const { data: lideresData } = await supabase
+      .from('voluntarios_general')
+      .select('lider_nombre, coordinador_nombre, cuadrilla_codigo')
+      .not('lider_nombre', 'is', null);
+
+    const lideresSet = new Set();
+    const coordinadoresMap = {};
+
+    (lideresData || []).forEach(r => {
+      if (r.lider_nombre) {
+        lideresSet.add(r.lider_nombre);
+        if (!coordinadoresMap[r.lider_nombre]) {
+          coordinadoresMap[r.lider_nombre] = new Set();
+        }
+        if (r.coordinador_nombre) {
+          coordinadoresMap[r.lider_nombre].add(r.coordinador_nombre);
+        }
+      }
+    });
+
+    const responseData = {
+      lideres: Array.from(lideresSet).sort(),
+      coordinadoresPorLider: {}
+    };
+
+    for (const [lider, coordsSet] of Object.entries(coordinadoresMap)) {
+      responseData.coordinadoresPorLider[lider] = Array.from(coordsSet).sort();
+    }
+
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

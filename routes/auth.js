@@ -41,7 +41,9 @@ router.post('/login', async (req, res) => {
         id: user.id,
         nombre: user.nombre,
         correo: user.correo,
-        rol: user.rol
+        rol: user.rol || 'comision',
+        lider_nombre: user.lider_nombre || null,
+        coordinador_nombre: user.coordinador_nombre || null
       }
     };
 
