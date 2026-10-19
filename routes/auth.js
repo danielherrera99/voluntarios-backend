@@ -36,14 +36,95 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ==============================================================================
-// 1. SOLICITUD DE REGISTRO DE CUENTA (ESTILO JUFRA POMALCA)
+// 0. VERIFICAR DNI EN EL PADRÓN DE VOLUNTARIOS (AUTOCOMPLETADO Y VÍNCULO)
 // ==============================================================================
-router.post('/register', async (req, res) => {
-  const { nombre, email, password, telefono } = req.body;
+router.get('/verificar-dni/:dni', async (req, res) => {
+  const { dni } = req.params;
+  const cleanDni = String(dni || '').replace(/\D/g, '').trim();
+
+  if (cleanDni.length < 8) {
+    return res.status(400).json({ exists: false, msg: 'El DNI debe tener 8 dígitos.' });
+  }
 
   try {
-    if (!nombre || !email || !password) {
-      return res.status(400).json({ msg: 'Por favor completa todos los campos requeridos.' });
+    // 1. Verificar si ya tiene cuenta en usuarios
+    const { data: userAccount } = await supabase
+      .from('usuarios')
+      .select('id, correo, estado')
+      .eq('dni', cleanDni)
+      .maybeSingle();
+
+    if (userAccount) {
+      return res.json({
+        existsInPadrón: false,
+        hasAccount: true,
+        accountStatus: userAccount.estado,
+        msg: userAccount.estado === 'pendiente' 
+          ? 'Ya existe una solicitud pendiente con este DNI.' 
+          : 'Este DNI ya tiene una cuenta activa. Puedes iniciar sesión.'
+      });
+    }
+
+    // 2. Buscar en Fase 2 o Fase 1
+    const { data: volF2 } = await supabase
+      .from('voluntarios')
+      .select('dni, nombres_apellidos, parroquia, estado')
+      .eq('dni', cleanDni)
+      .maybeSingle();
+
+    if (volF2) {
+      return res.json({
+        existsInPadrón: true,
+        hasAccount: false,
+        voluntario: {
+          nombres: volF2.nombres_apellidos,
+          parroquia: volF2.parroquia,
+          fase: 'Fase 2',
+          estado: volF2.estado
+        }
+      });
+    }
+
+    const { data: volF1 } = await supabase
+      .from('voluntarios_general')
+      .select('dni, nombres_apellidos, parroquia, estado')
+      .eq('dni', cleanDni)
+      .maybeSingle();
+
+    if (volF1) {
+      return res.json({
+        existsInPadrón: true,
+        hasAccount: false,
+        voluntario: {
+          nombres: volF1.nombres_apellidos,
+          parroquia: volF1.parroquia,
+          fase: 'Fase 1',
+          estado: volF1.estado
+        }
+      });
+    }
+
+    res.json({ existsInPadrón: false, hasAccount: false });
+  } catch (err) {
+    console.error('Error verificando DNI:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==============================================================================
+// 1. SOLICITUD DE REGISTRO DE CUENTA AMARRADA A DNI (ESTILO JUFRA POMALCA)
+// ==============================================================================
+router.post('/register', async (req, res) => {
+  const { nombre, email, password, telefono, dni } = req.body;
+
+  try {
+    if (!nombre || !email || !password || !dni) {
+      return res.status(400).json({ msg: 'Por favor completa todos los campos requeridos, incluyendo tu DNI.' });
+    }
+
+    const cleanDni = String(dni).replace(/\D/g, '').trim();
+    if (cleanDni.length !== 8) {
+      return res.status(400).json({ msg: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
     }
 
     if (password.length < 6) {
@@ -52,16 +133,16 @@ router.post('/register', async (req, res) => {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    // 1. Verificar si el usuario ya existe
-    const { data: existingUsers, error: searchErr } = await supabase
+    // 1. Verificar si el correo ya existe
+    const { data: existingEmail, error: emailErr } = await supabase
       .from('usuarios')
       .select('id, correo, estado')
       .eq('correo', cleanEmail);
 
-    if (searchErr) throw searchErr;
+    if (emailErr) throw emailErr;
 
-    if (existingUsers && existingUsers.length > 0) {
-      const existing = existingUsers[0];
+    if (existingEmail && existingEmail.length > 0) {
+      const existing = existingEmail[0];
       if (existing.estado === 'pendiente') {
         return res.status(400).json({
           msg: 'Ya existe una solicitud pendiente con este correo. Por favor espera a que el Administrador la apruebe.'
@@ -77,15 +158,30 @@ router.post('/register', async (req, res) => {
       }
     }
 
-    // 2. Encriptar contraseña
+    // 2. Verificar si el DNI ya está registrado en usuarios
+    const { data: existingDni, error: dniErr } = await supabase
+      .from('usuarios')
+      .select('id, dni, estado')
+      .eq('dni', cleanDni);
+
+    if (dniErr) throw dniErr;
+
+    if (existingDni && existingDni.length > 0) {
+      return res.status(400).json({
+        msg: `El DNI ${cleanDni} ya tiene una cuenta o solicitud en el sistema.`
+      });
+    }
+
+    // 3. Encriptar contraseña
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
 
-    // 3. Insertar usuario en estado 'pendiente'
+    // 4. Insertar usuario amarrado a su DNI en estado 'pendiente'
     const { data: newUser, error: insertErr } = await supabase
       .from('usuarios')
       .insert([
         {
+          dni: cleanDni,
           nombre: nombre.trim(),
           correo: cleanEmail,
           password_hash,
@@ -94,7 +190,7 @@ router.post('/register', async (req, res) => {
           estado: 'pendiente'
         }
       ])
-      .select('id, nombre, correo, estado, created_at')
+      .select('id, dni, nombre, correo, estado, created_at')
       .single();
 
     if (insertErr) throw insertErr;
@@ -111,24 +207,28 @@ router.post('/register', async (req, res) => {
 });
 
 // ==============================================================================
-// 2. INICIO DE SESIÓN
+// 2. INICIO DE SESIÓN (SOPORTA CORREO ELECTRÓNICO O DNI)
 // ==============================================================================
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
     if (!email || !password) {
-      return res.status(400).json({ msg: 'Ingresa correo y contraseña' });
+      return res.status(400).json({ msg: 'Ingresa correo/DNI y contraseña' });
     }
 
-    const cleanEmail = email.toLowerCase().trim();
+    const cleanInput = String(email).trim().toLowerCase();
+    const isDni = /^\d{8}$/.test(cleanInput);
 
-    // 1. Buscar usuario por correo
-    const { data: users, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('correo', cleanEmail);
+    // 1. Buscar usuario por correo O por DNI
+    let query = supabase.from('usuarios').select('*');
+    if (isDni) {
+      query = query.or(`dni.eq.${cleanInput},correo.eq.${cleanInput}`);
+    } else {
+      query = query.eq('correo', cleanInput);
+    }
 
+    const { data: users, error } = await query;
     if (error) throw error;
 
     if (!users || users.length === 0) {
@@ -160,6 +260,7 @@ router.post('/login', async (req, res) => {
     const payload = {
       user: {
         id: user.id,
+        dni: user.dni || null,
         nombre: user.nombre,
         correo: user.correo,
         rol: user.rol || 'comision',
@@ -194,7 +295,7 @@ router.get('/solicitudes', requireAdmin, async (req, res) => {
   try {
     const { data: allUsers, error } = await supabase
       .from('usuarios')
-      .select('id, nombre, correo, telefono, rol, estado, created_at, lider_nombre, coordinador_nombre')
+      .select('id, dni, nombre, correo, telefono, rol, estado, created_at, lider_nombre, coordinador_nombre')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -229,14 +330,14 @@ router.put('/solicitudes/:id/aprobar', requireAdmin, async (req, res) => {
         rol: rol
       })
       .eq('id', id)
-      .select('id, nombre, correo, rol, estado')
+      .select('id, dni, nombre, correo, rol, estado')
       .single();
 
     if (error) throw error;
 
     res.json({
       success: true,
-      msg: `Usuario "${data.nombre}" aprobado con éxito como "${data.rol}".`,
+      msg: `Usuario "${data.nombre}" (${data.dni || 'Sin DNI'}) aprobado con éxito como "${data.rol}".`,
       usuario: data
     });
   } catch (error) {
@@ -254,7 +355,7 @@ router.put('/solicitudes/:id/rechazar', requireAdmin, async (req, res) => {
       .from('usuarios')
       .update({ estado: 'rechazado' })
       .eq('id', id)
-      .select('id, nombre, correo, estado')
+      .select('id, dni, nombre, correo, estado')
       .single();
 
     if (error) throw error;
