@@ -215,6 +215,54 @@ app.post('/api/distribute-voluntarios', async (req, res) => {
   }
 });
 
+// Endpoint para obtener estadísticas y avance por colaborador
+app.get('/api/collaborators-stats', async (req, res) => {
+  try {
+    let allRows = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from('voluntarios_general')
+        .select('fase, estado')
+        .or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO')
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows.push(...data);
+      if (data.length < size) break;
+      page++;
+    }
+
+    const statsMap = {};
+    for (const r of allRows) {
+      const name = (r.fase && r.fase !== '1' && r.fase !== '2') ? r.fase : 'Sin asignar';
+      if (!statsMap[name]) {
+        statsMap[name] = { name, total: 0, contactados: 0, pendientes: 0 };
+      }
+      statsMap[name].total++;
+      if (r.estado === 'CONTACTADO') {
+        statsMap[name].contactados++;
+      } else {
+        statsMap[name].pendientes++;
+      }
+    }
+
+    const result = Object.values(statsMap).map(s => ({
+      ...s,
+      porcentaje: s.total > 0 ? Math.round((s.contactados / s.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error en collaborators-stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
 // Endpoint para chocolotear / repartir equitativamente entre Líderes y Cuadrillas
 app.post('/api/distribute-cuadrillas', async (req, res) => {
   try {
