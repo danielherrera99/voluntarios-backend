@@ -68,7 +68,7 @@ router.get('/verificar-dni/:dni', async (req, res) => {
     // 2. Buscar en Fase 2 o Fase 1
     const { data: volF2 } = await supabase
       .from('voluntarios')
-      .select('dni, nombres_apellidos, parroquia, estado')
+      .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
       .eq('dni', cleanDni)
       .maybeSingle();
 
@@ -78,7 +78,9 @@ router.get('/verificar-dni/:dni', async (req, res) => {
         hasAccount: false,
         voluntario: {
           nombres: volF2.nombres_apellidos,
-          parroquia: volF2.parroquia,
+          correo: volF2.correo || '',
+          telefono: volF2.telefono || '',
+          distrito: volF2.distrito || volF2.jurisdiccion || '',
           fase: 'Fase 2',
           estado: volF2.estado
         }
@@ -87,7 +89,7 @@ router.get('/verificar-dni/:dni', async (req, res) => {
 
     const { data: volF1 } = await supabase
       .from('voluntarios_general')
-      .select('dni, nombres_apellidos, parroquia, estado')
+      .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
       .eq('dni', cleanDni)
       .maybeSingle();
 
@@ -97,7 +99,9 @@ router.get('/verificar-dni/:dni', async (req, res) => {
         hasAccount: false,
         voluntario: {
           nombres: volF1.nombres_apellidos,
-          parroquia: volF1.parroquia,
+          correo: volF1.correo || '',
+          telefono: volF1.telefono || '',
+          distrito: volF1.distrito || volF1.jurisdiccion || '',
           fase: 'Fase 1',
           estado: volF1.estado
         }
