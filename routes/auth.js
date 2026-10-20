@@ -65,45 +65,42 @@ router.get('/verificar-dni/:dni', async (req, res) => {
       });
     }
 
-    // 2. Buscar en Fase 2 o Fase 1
-    const { data: volF2 } = await supabase
-      .from('voluntarios')
-      .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
-      .eq('dni', cleanDni)
-      .maybeSingle();
+    // 2. Buscar en paralelo en ambas tablas (Fase 1 General y Fase 2)
+    const [resF1, resF2] = await Promise.all([
+      supabase
+        .from('voluntarios_general')
+        .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
+        .eq('dni', cleanDni)
+        .maybeSingle(),
+      supabase
+        .from('voluntarios')
+        .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
+        .eq('dni', cleanDni)
+        .maybeSingle()
+    ]);
 
-    if (volF2) {
+    const f1 = resF1.data || null;
+    const f2 = resF2.data || null;
+
+    if (f1 || f2) {
+      // Priorizar el correo y teléfono de Fase 1 (que tiene la ficha completa de inscripción)
+      const nombres = (f1?.nombres_apellidos || f2?.nombres_apellidos || '').trim();
+      const correo = (f1?.correo || f2?.correo || '').trim();
+      const telefono = (f1?.telefono || f2?.telefono || '').trim();
+      const distrito = (f1?.distrito || f2?.distrito || f1?.jurisdiccion || f2?.jurisdiccion || '').trim();
+      const fase = f2 ? 'Fase 2' : 'Fase 1';
+      const estado = f2?.estado || f1?.estado || 'REGISTRADO';
+
       return res.json({
         existsInPadrón: true,
         hasAccount: false,
         voluntario: {
-          nombres: volF2.nombres_apellidos,
-          correo: volF2.correo || '',
-          telefono: volF2.telefono || '',
-          distrito: volF2.distrito || volF2.jurisdiccion || '',
-          fase: 'Fase 2',
-          estado: volF2.estado
-        }
-      });
-    }
-
-    const { data: volF1 } = await supabase
-      .from('voluntarios_general')
-      .select('dni, nombres_apellidos, correo, telefono, distrito, jurisdiccion, estado')
-      .eq('dni', cleanDni)
-      .maybeSingle();
-
-    if (volF1) {
-      return res.json({
-        existsInPadrón: true,
-        hasAccount: false,
-        voluntario: {
-          nombres: volF1.nombres_apellidos,
-          correo: volF1.correo || '',
-          telefono: volF1.telefono || '',
-          distrito: volF1.distrito || volF1.jurisdiccion || '',
-          fase: 'Fase 1',
-          estado: volF1.estado
+          nombres,
+          correo,
+          telefono,
+          distrito,
+          fase,
+          estado
         }
       });
     }
