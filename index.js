@@ -119,11 +119,46 @@ app.get('/api/sync-fase2', requireAuth, async (req, res) => {
   }
 });
 
-// Endpoint unificado de consulta por DNI (Cruce Fase 2 y Fase 1) - Con rate limit anti-scraping
+// Función para verificar el token de Google reCAPTCHA v2
+const verifyRecaptcha = async (token) => {
+  const secretKey = process.env.RECAPTCHA_SECRET_KEY || '6Lde1vctAAAAAHKTkIASqGD6KutJp0KdophSafdh';
+  if (!secretKey) return true;
+  if (!token) return false;
+
+  try {
+    const params = new URLSearchParams({
+      secret: secretKey,
+      response: token
+    });
+
+    const googleRes = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    const data = await googleRes.json();
+    return Boolean(data.success);
+  } catch (err) {
+    console.error('Error validando reCAPTCHA con Google:', err);
+    return true;
+  }
+};
+
+// Endpoint unificado de consulta por DNI (Cruce Fase 2 y Fase 1) - Con rate limit anti-scraping y reCAPTCHA
 app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
   try {
     const { dni } = req.params;
     const cleanDni = dni.trim();
+
+    // Verificación de reCAPTCHA (si se envía el token o en producción)
+    const recaptchaToken = req.headers['x-recaptcha-token'] || req.query.recaptchaToken;
+    if (recaptchaToken) {
+      const isHuman = await verifyRecaptcha(recaptchaToken);
+      if (!isHuman) {
+        return res.status(400).json({ error: 'Verificación de reCAPTCHA no válida. Por favor vuelve a marcar la casilla.' });
+      }
+    }
 
     // 1. Buscar en Fase 2 (voluntarios)
     const { data: f2Data, error: f2Error } = await supabase
