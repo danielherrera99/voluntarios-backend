@@ -12,6 +12,35 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const jwtSecret = process.env.JWT_SECRET || 'mi_secreto_super_seguro_jufra_2026';
 
+const rateLimit = require('express-rate-limit');
+
+// Rate limiter para login y registro (máx 20 intentos por 15 min por IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { msg: 'Demasiados intentos de acceso desde esta conexión. Por seguridad, intente en 15 minutos.' }
+});
+
+// Middleware para verificar que la petición proviene de un usuario autenticado
+const requireAuth = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ msg: 'No se proporcionó token de autenticación' });
+  }
+
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+  try {
+    const decoded = jwt.verify(token, jwtSecret);
+    req.user = decoded.user;
+    next();
+  } catch (err) {
+    return res.status(401).json({ msg: 'Token inválido o expirado' });
+  }
+};
+
 // Middleware para verificar que la petición proviene de un Administrador
 const requireAdmin = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -115,7 +144,7 @@ router.get('/verificar-dni/:dni', async (req, res) => {
 // ==============================================================================
 // 1. SOLICITUD DE REGISTRO DE CUENTA AMARRADA A DNI (ESTILO JUFRA POMALCA)
 // ==============================================================================
-router.post('/register', async (req, res) => {
+router.post('/register', authLimiter, async (req, res) => {
   const { nombre, email, password, telefono, dni } = req.body;
 
   try {
@@ -210,7 +239,7 @@ router.post('/register', async (req, res) => {
 // ==============================================================================
 // 2. INICIO DE SESIÓN (SOPORTA CORREO ELECTRÓNICO O DNI)
 // ==============================================================================
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -441,5 +470,8 @@ router.delete('/usuarios/:id', requireAdmin, async (req, res) => {
     res.status(500).json({ msg: 'Error al eliminar usuario' });
   }
 });
+
+router.requireAdmin = requireAdmin;
+router.requireAuth = requireAuth;
 
 module.exports = router;

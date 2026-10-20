@@ -1,26 +1,82 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// 1. Cabeceras de seguridad HTTP con Helmet
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// 2. Configuración segura de CORS
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:4173',
+  'https://voluntarios-chiclayo.web.app',
+  'https://voluntarios-web.onrender.com'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      origin.endsWith('.web.app') ||
+      origin.endsWith('.firebaseapp.com') ||
+      origin.endsWith('.onrender.com') ||
+      origin.includes('localhost')
+    ) {
+      return callback(null, true);
+    }
+    return callback(new Error('Bloqueado por política CORS'));
+  },
+  credentials: true
+}));
+
 app.use(express.json());
+
+// 3. Limitadores de Tasa (Rate Limiting)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes al servidor. Por favor espere unos momentos.' }
+});
+
+const consultaLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 15, // Máximo 15 consultas por minuto por IP (bloquea scraping masivo)
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Ha superado el límite de consultas por minuto. Por favor espere un momento antes de volver a consultar.' }
+});
+
+app.use('/api', generalLimiter);
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const authRouter = require('./routes/auth');
+const requireAuth = authRouter.requireAuth;
+const requireAdmin = authRouter.requireAdmin;
+
 // Rutas
-app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', authRouter);
 
 // Ruta básica para verificar que el servidor funciona
 app.get('/', (req, res) => {
   res.send('API Voluntarios Funcionando');
 });
 
-// Obtener todos los voluntarios
-app.get('/api/voluntarios', async (req, res) => {
+// Obtener todos los voluntarios (Protegido por token)
+app.get('/api/voluntarios', requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('voluntarios')
@@ -34,8 +90,8 @@ app.get('/api/voluntarios', async (req, res) => {
   }
 });
 
-// Consultar padrón general por DNI (Fase 1)
-app.get('/api/voluntarios-general/:dni', async (req, res) => {
+// Consultar padrón general por DNI (Fase 1) - Con rate limit anti-scraping
+app.get('/api/voluntarios-general/:dni', consultaLimiter, async (req, res) => {
   try {
     const { dni } = req.params;
     const { data, error } = await supabase
@@ -53,8 +109,8 @@ app.get('/api/voluntarios-general/:dni', async (req, res) => {
 
 const { syncFase2Data } = require('./sync_fase2');
 
-// Ruta para sincronizar manualmente o por webhook
-app.get('/api/sync-fase2', async (req, res) => {
+// Ruta para sincronizar manualmente o por webhook (Protegido por token)
+app.get('/api/sync-fase2', requireAuth, async (req, res) => {
   try {
     const result = await syncFase2Data();
     res.json(result);
@@ -63,8 +119,8 @@ app.get('/api/sync-fase2', async (req, res) => {
   }
 });
 
-// Endpoint unificado de consulta por DNI (Cruce Fase 2 y Fase 1)
-app.get('/api/consulta/:dni', async (req, res) => {
+// Endpoint unificado de consulta por DNI (Cruce Fase 2 y Fase 1) - Con rate limit anti-scraping
+app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
   try {
     const { dni } = req.params;
     const cleanDni = dni.trim();
@@ -135,8 +191,8 @@ app.get('/api/consulta/:dni', async (req, res) => {
   }
 });
 
-// Endpoint para repartir equitativamente los postulantes de Fase 1 entre colaboradores
-app.post('/api/distribute-voluntarios', async (req, res) => {
+// Endpoint para repartir equitativamente los postulantes de Fase 1 entre colaboradores (Protegido)
+app.post('/api/distribute-voluntarios', requireAuth, async (req, res) => {
   try {
     const { collaborators } = req.body;
     if (!collaborators || !Array.isArray(collaborators) || collaborators.length === 0) {
