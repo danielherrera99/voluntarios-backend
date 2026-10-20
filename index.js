@@ -238,7 +238,7 @@ app.get('/api/collaborators-stats', async (req, res) => {
 
     const statsMap = {};
     for (const r of allRows) {
-      const name = (r.fase && r.fase !== '1' && r.fase !== '2') ? r.fase : 'Sin asignar';
+      const name = (r.fase && String(r.fase).trim()) ? String(r.fase).trim() : 'Sin asignar';
       if (!statsMap[name]) {
         statsMap[name] = { name, total: 0, contactados: 0, pendientes: 0 };
       }
