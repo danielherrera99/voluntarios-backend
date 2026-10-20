@@ -150,7 +150,8 @@ app.post('/api/distribute-voluntarios', async (req, res) => {
 
     console.log(`⚡ Iniciando reparto equitativo entre ${cleanNames.length} colaboradores:`, cleanNames);
 
-    // 1. Obtener todos los IDs de los postulantes que no han completado Fase 2
+    // 1. Obtener solo los postulantes que AÚN NO han sido contactados (SIN_FASE2)
+    // Esto protege a todos los que ya fueron contactados (CONTACTADO), manteniendo su asignación intacta.
     let allIds = [];
     let page = 0;
     const size = 1000;
@@ -158,7 +159,7 @@ app.post('/api/distribute-voluntarios', async (req, res) => {
       const { data, error } = await supabase
         .from('voluntarios_general')
         .select('id')
-        .or('estado.eq.SIN_FASE2,estado.eq.CONTACTADO')
+        .eq('estado', 'SIN_FASE2')
         .order('nombres_apellidos', { ascending: true })
         .range(page * size, (page + 1) * size - 1);
 
