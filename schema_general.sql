@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS voluntarios_general (
   estado VARCHAR DEFAULT 'PENDIENTE',
   fase VARCHAR DEFAULT '1',
   fecha_inscripcion TIMESTAMP WITH TIME ZONE,
+  tiene_whatsapp BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
 );
 
