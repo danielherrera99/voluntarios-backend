@@ -291,7 +291,7 @@ router.post('/login', async (req, res) => {
 // 3. MÓDULO EXCLUSIVO PARA ADMINISTRADOR: GESTIÓN DE SOLICITUDES Y USUARIOS
 // ==============================================================================
 
-// Obtener todas las solicitudes y usuarios
+// Obtener todas las solicitudes y usuarios enriquecidos con su estado en el Padrón
 router.get('/solicitudes', requireAdmin, async (req, res) => {
   try {
     const { data: allUsers, error } = await supabase
@@ -301,9 +301,53 @@ router.get('/solicitudes', requireAdmin, async (req, res) => {
 
     if (error) throw error;
 
-    const pendientes = (allUsers || []).filter(u => u.estado === 'pendiente');
-    const aprobados = (allUsers || []).filter(u => u.estado === 'aprobado');
-    const rechazados = (allUsers || []).filter(u => u.estado === 'rechazado');
+    // Obtener los DNIs de todos los usuarios
+    const dnis = (allUsers || [])
+      .map(u => u.dni ? String(u.dni).replace(/\D/g, '').trim() : null)
+      .filter(Boolean);
+
+    let f1Map = {};
+    let f2Map = {};
+
+    if (dnis.length > 0) {
+      const [resF1, resF2] = await Promise.all([
+        supabase
+          .from('voluntarios_general')
+          .select('dni, nombres_apellidos, estado, distrito, jurisdiccion')
+          .in('dni', dnis),
+        supabase
+          .from('voluntarios')
+          .select('dni, nombres_apellidos, estado, distrito, jurisdiccion')
+          .in('dni', dnis)
+      ]);
+
+      (resF1.data || []).forEach(r => { if (r.dni) f1Map[r.dni] = r; });
+      (resF2.data || []).forEach(r => { if (r.dni) f2Map[r.dni] = r; });
+    }
+
+    // Enriquecer cada usuario con la marca de si pertenece o no al Padrón
+    const enrichedUsers = (allUsers || []).map(u => {
+      const cleanDni = u.dni ? String(u.dni).replace(/\D/g, '').trim() : null;
+      const f1 = cleanDni ? f1Map[cleanDni] : null;
+      const f2 = cleanDni ? f2Map[cleanDni] : null;
+
+      const inPadron = Boolean(f1 || f2);
+      const padronFase = f2 ? 'Fase 2' : (f1 ? 'Fase 1' : null);
+      const padronEstado = f2?.estado || f1?.estado || null;
+      const padronDistrito = f1?.distrito || f2?.distrito || f1?.jurisdiccion || f2?.jurisdiccion || null;
+
+      return {
+        ...u,
+        inPadron,
+        padronFase,
+        padronEstado,
+        padronDistrito
+      };
+    });
+
+    const pendientes = enrichedUsers.filter(u => u.estado === 'pendiente');
+    const aprobados = enrichedUsers.filter(u => u.estado === 'aprobado');
+    const rechazados = enrichedUsers.filter(u => u.estado === 'rechazado');
 
     res.json({
       pendientes,
