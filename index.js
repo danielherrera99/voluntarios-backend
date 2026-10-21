@@ -66,9 +66,49 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const authRouter = require('./routes/auth');
 const requireAuth = authRouter.requireAuth;
 const requireAdmin = authRouter.requireAdmin;
+const { logAudit } = require('./audit');
 
 // Rutas
 app.use('/api/auth', authRouter);
+
+// Endpoint para registrar eventos de auditoría desde el cliente autenticado
+app.post('/api/auditoria', requireAuth, async (req, res) => {
+  try {
+    const { accion, detalles } = req.body;
+    if (!accion) {
+      return res.status(400).json({ error: 'El campo "accion" es obligatorio' });
+    }
+
+    await logAudit({
+      req,
+      accion,
+      detalles: detalles || {}
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error registrando auditoría:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint exclusivo para Administrador: Consultar el historial de auditoría
+app.get('/api/auditoria', requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 300);
+    const { data, error } = await supabase
+      .from('auditoria_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error('Error obteniendo historial de auditoría:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Ruta básica para verificar que el servidor funciona
 app.get('/', (req, res) => {
@@ -296,6 +336,16 @@ app.post('/api/distribute-voluntarios', requireAuth, async (req, res) => {
 
     console.log('✅ Reparto completado con éxito:', distributionSummary);
 
+    await logAudit({
+      req,
+      accion: 'REPARTO_VOLUNTARIOS',
+      detalles: {
+        totalAsignados: total,
+        totalColaboradores: numCollaborators,
+        resumen: distributionSummary
+      }
+    });
+
     res.json({
       success: true,
       total,
@@ -484,6 +534,16 @@ app.post('/api/distribute-cuadrillas', async (req, res) => {
     }
 
     console.log('✅ Chocoloteo y reparto de cuadrillas finalizado con éxito.');
+
+    await logAudit({
+      req,
+      accion: 'REPARTO_CUADRILLAS',
+      detalles: {
+        totalAsignados: total,
+        totalLideres: hierarchy.length,
+        resumen: summary
+      }
+    });
 
     res.json({
       success: true,

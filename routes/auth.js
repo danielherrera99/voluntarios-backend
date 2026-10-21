@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
+const { logAudit } = require('../audit');
 require('dotenv').config();
 
 const router = express.Router();
@@ -157,8 +158,13 @@ router.post('/register', authLimiter, async (req, res) => {
       return res.status(400).json({ msg: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ msg: 'La contraseña debe tener al menos 6 caracteres.' });
+    // Validación de complejidad de contraseña (mínimo 8 caracteres, al menos 1 letra y 1 número)
+    const hasLetter = /[a-zA-Z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    if (password.length < 8 || !hasLetter || !hasNumber) {
+      return res.status(400).json({
+        msg: 'La contraseña debe tener al menos 8 caracteres y combinar letras y números.'
+      });
     }
 
     const cleanEmail = email.toLowerCase().trim();
@@ -225,6 +231,14 @@ router.post('/register', authLimiter, async (req, res) => {
 
     if (insertErr) throw insertErr;
 
+    // Registrar en auditoría
+    await logAudit({
+      req,
+      usuario: newUser,
+      accion: 'REGISTRO_SOLICITUD',
+      detalles: { dni: cleanDni, nombre: nombre.trim(), correo: cleanEmail, telefono }
+    });
+
     res.status(201).json({
       success: true,
       msg: '¡Solicitud enviada con éxito! Tu cuenta está en revisión y debe ser aprobada por el Administrador antes de ingresar.',
@@ -262,6 +276,11 @@ router.post('/login', authLimiter, async (req, res) => {
     if (error) throw error;
 
     if (!users || users.length === 0) {
+      await logAudit({
+        req,
+        accion: 'LOGIN_FALLIDO',
+        detalles: { input: cleanInput, motivo: 'Usuario no encontrado' }
+      });
       return res.status(401).json({ msg: 'Credenciales inválidas' });
     }
 
@@ -270,6 +289,12 @@ router.post('/login', authLimiter, async (req, res) => {
     // 2. Verificar contraseña con bcrypt
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      await logAudit({
+        req,
+        usuario: { id: user.id, nombre: user.nombre, correo: user.correo },
+        accion: 'LOGIN_FALLIDO',
+        detalles: { input: cleanInput, motivo: 'Contraseña incorrecta' }
+      });
       return res.status(401).json({ msg: 'Credenciales inválidas' });
     }
 
@@ -286,7 +311,7 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
-    // 4. Generar JWT para usuarios aprobados
+    // 4. Generar JWT para usuarios aprobados con caducidad automática de 8 horas
     const payload = {
       user: {
         id: user.id,
@@ -304,9 +329,18 @@ router.post('/login', authLimiter, async (req, res) => {
     jwt.sign(
       payload,
       jwtSecret,
-      { expiresIn: '3d' }, // Token válido por 3 días
-      (err, token) => {
+      { expiresIn: '8h' }, // Sesión expira automáticamente tras 8 horas por seguridad
+      async (err, token) => {
         if (err) throw err;
+
+        // Registrar login exitoso en auditoría
+        await logAudit({
+          req,
+          usuario: payload.user,
+          accion: 'LOGIN_EXITOSO',
+          detalles: { dni: user.dni, correo: user.correo, rol: user.rol }
+        });
+
         res.json({ token, user: payload.user });
       }
     );
@@ -409,6 +443,17 @@ router.put('/solicitudes/:id/aprobar', requireAdmin, async (req, res) => {
 
     if (error) throw error;
 
+    await logAudit({
+      req,
+      accion: 'USUARIO_APROBADO',
+      detalles: {
+        usuario_aprobado_id: id,
+        nombre: data.nombre,
+        dni: data.dni,
+        rol: data.rol
+      }
+    });
+
     res.json({
       success: true,
       msg: `Usuario "${data.nombre}" (${data.dni || 'Sin DNI'}) aprobado con éxito como "${data.rol}".`,
@@ -434,6 +479,16 @@ router.put('/solicitudes/:id/rechazar', requireAdmin, async (req, res) => {
 
     if (error) throw error;
 
+    await logAudit({
+      req,
+      accion: 'USUARIO_RECHAZADO',
+      detalles: {
+        usuario_rechazado_id: id,
+        nombre: data.nombre,
+        dni: data.dni
+      }
+    });
+
     res.json({
       success: true,
       msg: `Solicitud de "${data.nombre}" rechazada.`,
@@ -454,12 +509,30 @@ router.delete('/usuarios/:id', requireAdmin, async (req, res) => {
       return res.status(400).json({ msg: 'No puedes eliminar tu propia cuenta de Administrador.' });
     }
 
+    // Obtener información previa del usuario antes de eliminarlo
+    const { data: userToDelete } = await supabase
+      .from('usuarios')
+      .select('id, nombre, correo, dni, rol')
+      .eq('id', id)
+      .maybeSingle();
+
     const { error } = await supabase
       .from('usuarios')
       .delete()
       .eq('id', id);
 
     if (error) throw error;
+
+    await logAudit({
+      req,
+      accion: 'USUARIO_ELIMINADO',
+      detalles: {
+        usuario_eliminado_id: id,
+        nombre: userToDelete?.nombre || 'Desconocido',
+        dni: userToDelete?.dni || null,
+        correo: userToDelete?.correo || null
+      }
+    });
 
     res.json({
       success: true,
