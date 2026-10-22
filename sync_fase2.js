@@ -242,6 +242,12 @@ async function syncFase2Data() {
       await supabase.from('voluntarios_general').update({ estado: 'CON_FASE2', fase: '2' }).in('dni', chunk);
     }
     console.log(`✅ Cruce con 'voluntarios_general' completado.`);
+
+    // 2. Heredar jurisdicción desde Fase 1 para mantener coherencia geográfica
+    await supabase.rpc('exec_sql', {
+      sql: `UPDATE voluntarios v SET jurisdiccion = vg.jurisdiccion FROM voluntarios_general vg WHERE v.dni = vg.dni AND (v.jurisdiccion IS NULL OR v.jurisdiccion = '') AND vg.jurisdiccion IS NOT NULL;`
+    });
+    console.log(`✅ Jurisdicciones sincronizadas en Fase 2.`);
   } catch (errSync) {
     console.warn(`⚠️ Error actualizando estado en voluntarios_general:`, errSync.message);
   }
