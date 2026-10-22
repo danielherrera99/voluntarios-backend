@@ -544,6 +544,370 @@ router.delete('/usuarios/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// ==============================================================================
+// 4. RECUPERACIÓN Y CAMBIO DE CONTRASEÑA (ESTILO JUFRA POMALCA - OTP 6 DÍGITOS)
+// ==============================================================================
+
+async function sendRecoveryEmail({ toEmail, toName, code }) {
+  const htmlContent = `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e7e5e4; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06);">
+      <div style="background: linear-gradient(135deg, #851C1D 0%, #5B1314 100%); padding: 30px 20px; text-align: center; color: white;">
+        <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.5px;">Diócesis de Chiclayo</h2>
+        <p style="margin: 6px 0 0 0; font-size: 13px; color: #fde68a;">Comisión Diocesana de Voluntariado</p>
+      </div>
+      <div style="padding: 30px 24px; color: #292524;">
+        <h3 style="margin-top: 0; color: #1c1917; font-size: 18px;">Restablecer tu Contraseña</h3>
+        <p style="font-size: 14px; line-height: 1.6; color: #57534e;">
+          Hola <strong>${toName}</strong>,
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #57534e;">
+          Has solicitado restablecer la contraseña de tu cuenta en la plataforma de Voluntariado. Utiliza el siguiente código de verificación de 6 dígitos para continuar:
+        </p>
+        <div style="background: #fafaf9; border: 2px dashed #f59e0b; border-radius: 12px; padding: 18px; margin: 24px 0; text-align: center;">
+          <span style="font-family: monospace, Courier; font-size: 32px; font-weight: 800; letter-spacing: 10px; color: #851C1D;">${code}</span>
+        </div>
+        <p style="font-size: 13px; color: #78716c; line-height: 1.5;">
+          ⏳ Este código es de un solo uso y expirará en <strong>15 minutos</strong>.
+        </p>
+        <p style="font-size: 13px; color: #78716c; line-height: 1.5; margin-bottom: 0;">
+          Si tú no realizaste esta solicitud, puedes ignorar este mensaje de manera segura. Tu contraseña permanecerá intacta hasta que se verifique este código.
+        </p>
+      </div>
+      <div style="background-color: #fafaf9; border-top: 1px solid #e7e5e4; padding: 16px 20px; text-align: center; font-size: 11px; color: #a8a29e;">
+        © 2026 Diócesis de Chiclayo • Sistema Oficial de Gestión del Voluntariado
+      </div>
+    </div>
+  `;
+
+  // 1. Brevo API (Recomendado en Render)
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: {
+            name: 'Voluntariado Diócesis de Chiclayo',
+            email: process.env.EMAIL_USER || 'jufrapomalca@gmail.com'
+          },
+          to: [{ email: toEmail, name: toName }],
+          subject: 'Código de Recuperación de Contraseña - Voluntariado Diócesis de Chiclayo',
+          htmlContent
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error('Error Brevo API:', errorData);
+        throw new Error(`Brevo API Error: ${errorData}`);
+      }
+
+      console.log(`✉️ Correo de recuperación enviado a ${toEmail} vía Brevo API.`);
+      return { sent: true };
+    } catch (err) {
+      console.error('Falla enviando correo con Brevo API:', err.message);
+    }
+  }
+
+  // 2. Nodemailer (Gmail / SMTP)
+  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    try {
+      const nodemailer = require('nodemailer');
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS
+        }
+      });
+
+      await transporter.sendMail({
+        from: `"Voluntariado Diócesis de Chiclayo" <${process.env.EMAIL_USER}>`,
+        to: toEmail,
+        subject: 'Código de Recuperación de Contraseña - Voluntariado Diócesis de Chiclayo',
+        html: htmlContent
+      });
+
+      console.log(`✉️ Correo de recuperación enviado a ${toEmail} vía Nodemailer.`);
+      return { sent: true };
+    } catch (err) {
+      console.error('Falla enviando correo con Nodemailer:', err.message);
+    }
+  }
+
+  // 3. Fallback informativo si aún no hay credenciales configuradas
+  console.warn(`⚠️ [MODO DESARROLLO / PRUEBAS] No hay BREVO_API_KEY o EMAIL_USER/PASS configurados en el backend.`);
+  console.warn(`🔑 CÓDIGO GENERADO PARA ${toEmail}: [ ${code} ]`);
+  return { sent: false, isDev: true, code };
+}
+
+// 4.1 Solicitar código de recuperación
+router.post('/recuperar-password', authLimiter, async (req, res) => {
+  try {
+    const { usernameOrEmail } = req.body;
+    if (!usernameOrEmail) {
+      return res.status(400).json({ success: false, msg: 'Por favor ingresa tu DNI o correo electrónico registrado.' });
+    }
+
+    const cleanInput = String(usernameOrEmail).trim().toLowerCase();
+    const isDni = /^\d{8}$/.test(cleanInput);
+
+    // Buscar usuario por correo O por DNI
+    let query = supabase.from('usuarios').select('id, nombre, correo, dni, estado');
+    if (isDni) {
+      query = query.or(`dni.eq.${cleanInput},correo.eq.${cleanInput}`);
+    } else {
+      query = query.eq('correo', cleanInput);
+    }
+
+    const { data: users, error } = await query;
+    if (error) throw error;
+
+    if (!users || users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        msg: 'No se encontró ninguna cuenta registrada con ese DNI o correo.'
+      });
+    }
+
+    const usuario = users[0];
+
+    if (!usuario.correo) {
+      return res.status(400).json({
+        success: false,
+        msg: 'Esta cuenta no tiene un correo electrónico registrado. Por favor contacta al Administrador.'
+      });
+    }
+
+    if (usuario.estado === 'rechazado') {
+      return res.status(403).json({
+        success: false,
+        msg: 'Esta cuenta se encuentra desactivada o rechazada. Contacta al Administrador.'
+      });
+    }
+
+    // Generar código de 6 dígitos
+    const crypto = require('crypto');
+    const resetCode = crypto.randomInt(100000, 999999).toString();
+
+    // Hashear el código antes de guardarlo por seguridad
+    const salt = await bcrypt.genSalt(10);
+    const reset_password_code = await bcrypt.hash(resetCode, salt);
+    const reset_password_expire = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutos
+
+    const { error: updateErr } = await supabase
+      .from('usuarios')
+      .update({
+        reset_password_code,
+        reset_password_expire
+      })
+      .eq('id', usuario.id);
+
+    if (updateErr) throw updateErr;
+
+    // Enviar correo
+    const emailResult = await sendRecoveryEmail({
+      toEmail: usuario.correo,
+      toName: usuario.nombre,
+      code: resetCode
+    });
+
+    if (!emailResult.sent && !emailResult.isDev) {
+      // Si falló el envío y no es modo desarrollo
+      await supabase
+        .from('usuarios')
+        .update({ reset_password_code: null, reset_password_expire: null })
+        .eq('id', usuario.id);
+
+      return res.status(500).json({
+        success: false,
+        msg: emailResult.error || 'No se pudo enviar el correo de recuperación. Verifica la configuración de correo.'
+      });
+    }
+
+    // Registrar en auditoría
+    await logAudit({
+      req,
+      usuario: { id: usuario.id, nombre: usuario.nombre, correo: usuario.correo },
+      accion: 'SOLICITUD_RECUPERACION_PASSWORD',
+      detalles: { dni: usuario.dni, correo: usuario.correo }
+    });
+
+    // Censurar correo para la respuesta (ej. d***a@gmail.com)
+    const [local, domain] = usuario.correo.split('@');
+    const maskedLocal = local.length > 2 
+      ? `${local[0]}***${local[local.length - 1]}` 
+      : `${local[0]}***`;
+    const maskedEmail = `${maskedLocal}@${domain}`;
+
+    res.json({
+      success: true,
+      msg: `Código de seguridad enviado a ${maskedEmail}. Revisa tu bandeja de entrada o spam.`,
+      maskedEmail,
+      devCode: emailResult.isDev ? resetCode : undefined
+    });
+  } catch (err) {
+    console.error('Error en recuperar-password:', err);
+    res.status(500).json({ success: false, msg: 'Error interno del servidor al procesar la recuperación.' });
+  }
+});
+
+// 4.2 Verificar código de 6 dígitos
+router.post('/verificar-codigo', authLimiter, async (req, res) => {
+  try {
+    const { usernameOrEmail, codigo } = req.body;
+    if (!usernameOrEmail || !codigo) {
+      return res.status(400).json({ success: false, msg: 'Falta información requerida.' });
+    }
+
+    const cleanInput = String(usernameOrEmail).trim().toLowerCase();
+    const cleanCode = String(codigo).trim();
+
+    if (cleanCode.length !== 6) {
+      return res.status(400).json({ success: false, msg: 'El código debe tener exactamente 6 dígitos.' });
+    }
+
+    const isDni = /^\d{8}$/.test(cleanInput);
+
+    let query = supabase
+      .from('usuarios')
+      .select('id, nombre, correo, dni, reset_password_code, reset_password_expire');
+
+    if (isDni) {
+      query = query.or(`dni.eq.${cleanInput},correo.eq.${cleanInput}`);
+    } else {
+      query = query.eq('correo', cleanInput);
+    }
+
+    const { data: users, error } = await query;
+    if (error) throw error;
+
+    if (!users || users.length === 0) {
+      return res.status(400).json({ success: false, msg: 'Usuario no encontrado.' });
+    }
+
+    const user = users[0];
+
+    if (!user.reset_password_code || !user.reset_password_expire) {
+      return res.status(400).json({ success: false, msg: 'No hay ninguna solicitud de recuperación activa o el código ya fue utilizado.' });
+    }
+
+    // Verificar si ya expiró
+    const expireDate = new Date(user.reset_password_expire);
+    if (new Date() > expireDate) {
+      return res.status(400).json({ success: false, msg: 'El código de seguridad ha expirado (validez de 15 minutos). Solicita uno nuevo.' });
+    }
+
+    // Comparar código con bcrypt
+    const isMatch = await bcrypt.compare(cleanCode, user.reset_password_code);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, msg: 'Código de verificación incorrecto. Verifica los 6 dígitos ingresados.' });
+    }
+
+    res.json({
+      success: true,
+      msg: 'Código verificado con éxito. Ya puedes crear tu nueva contraseña.'
+    });
+  } catch (err) {
+    console.error('Error en verificar-codigo:', err);
+    res.status(500).json({ success: false, msg: 'Error al verificar el código.' });
+  }
+});
+
+// 4.3 Restablecer contraseña con código verificado
+router.put('/reset-password', authLimiter, async (req, res) => {
+  try {
+    const { usernameOrEmail, codigo, newPassword } = req.body;
+    if (!usernameOrEmail || !codigo || !newPassword) {
+      return res.status(400).json({ success: false, msg: 'Faltan datos requeridos.' });
+    }
+
+    const cleanInput = String(usernameOrEmail).trim().toLowerCase();
+    const cleanCode = String(codigo).trim();
+
+    // Validación de seguridad de contraseña (mínimo 8 caracteres, al menos 1 letra y 1 número)
+    const hasLetter = /[a-zA-Z]/.test(newPassword);
+    const hasNumber = /\d/.test(newPassword);
+    if (newPassword.length < 8 || !hasLetter || !hasNumber) {
+      return res.status(400).json({
+        success: false,
+        msg: 'La nueva contraseña debe tener al menos 8 caracteres y combinar letras y números.'
+      });
+    }
+
+    const isDni = /^\d{8}$/.test(cleanInput);
+
+    let query = supabase
+      .from('usuarios')
+      .select('id, nombre, correo, dni, reset_password_code, reset_password_expire');
+
+    if (isDni) {
+      query = query.or(`dni.eq.${cleanInput},correo.eq.${cleanInput}`);
+    } else {
+      query = query.eq('correo', cleanInput);
+    }
+
+    const { data: users, error } = await query;
+    if (error) throw error;
+
+    if (!users || users.length === 0) {
+      return res.status(400).json({ success: false, msg: 'Usuario no encontrado.' });
+    }
+
+    const user = users[0];
+
+    if (!user.reset_password_code || !user.reset_password_expire) {
+      return res.status(400).json({ success: false, msg: 'Código inválido o ya utilizado.' });
+    }
+
+    const expireDate = new Date(user.reset_password_expire);
+    if (new Date() > expireDate) {
+      return res.status(400).json({ success: false, msg: 'El código ha expirado. Solicita uno nuevo.' });
+    }
+
+    const isMatch = await bcrypt.compare(cleanCode, user.reset_password_code);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, msg: 'Código incorrecto.' });
+    }
+
+    // Hashear nueva contraseña
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(newPassword, salt);
+
+    // Actualizar usuario y limpiar código
+    const { error: updateErr } = await supabase
+      .from('usuarios')
+      .update({
+        password_hash,
+        reset_password_code: null,
+        reset_password_expire: null
+      })
+      .eq('id', user.id);
+
+    if (updateErr) throw updateErr;
+
+    // Registrar en auditoría
+    await logAudit({
+      req,
+      usuario: { id: user.id, nombre: user.nombre, correo: user.correo },
+      accion: 'PASSWORD_RESTABLECIDA',
+      detalles: { dni: user.dni, correo: user.correo }
+    });
+
+    res.json({
+      success: true,
+      msg: '¡Tu contraseña ha sido restablecida exitosamente! Ya puedes iniciar sesión con tu nueva contraseña.'
+    });
+  } catch (err) {
+    console.error('Error en reset-password:', err);
+    res.status(500).json({ success: false, msg: 'Error al restablecer la contraseña.' });
+  }
+});
+
 router.requireAdmin = requireAdmin;
 router.requireAuth = requireAuth;
 
