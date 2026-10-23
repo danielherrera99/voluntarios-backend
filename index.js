@@ -721,6 +721,101 @@ app.get('/api/lideres-coordinadores', async (req, res) => {
   }
 });
 
+// Endpoint para consultar la cadena de mandos (Responsables, Líderes, Guías)
+app.get('/api/estructura-mandos', async (req, res) => {
+  try {
+    const { responsable, lider, guia, dni } = req.query;
+    let query = supabase.from('estructura_mandos').select('*').order('id', { ascending: true });
+
+    if (responsable) query = query.ilike('responsable_nombre', `%${responsable}%`);
+    if (lider) query = query.ilike('lider_nombre', `%${lider}%`);
+    if (guia) query = query.ilike('guia_nombre', `%${guia}%`);
+    if (dni) query = query.or(`responsable_dni.eq.${dni},lider_dni.eq.${dni},guia_dni.eq.${dni}`);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      total: data.length,
+      mandos: data
+    });
+  } catch (err) {
+    console.error('❌ Error en /api/estructura-mandos:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para obtener el árbol jerárquico estructurado
+app.get('/api/estructura-mandos/resumen', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('estructura_mandos')
+      .select('*')
+      .order('id', { ascending: true });
+
+    if (error) throw error;
+
+    const respMap = new Map();
+
+    data.forEach(row => {
+      const rKey = row.responsable_nombre;
+      if (!respMap.has(rKey)) {
+        respMap.set(rKey, {
+          responsable: row.responsable_nombre,
+          dni: row.responsable_dni,
+          carta: row.responsable_carta,
+          totalCuadrillas: 0,
+          totalCapacidad: 0,
+          lideresMap: new Map()
+        });
+      }
+
+      const rObj = respMap.get(rKey);
+      rObj.totalCuadrillas++;
+      rObj.totalCapacidad += (row.total_voluntarios || 9);
+
+      const lKey = row.lider_nombre;
+      if (!rObj.lideresMap.has(lKey)) {
+        rObj.lideresMap.set(lKey, {
+          lider: row.lider_nombre,
+          dni: row.lider_dni,
+          carta: row.lider_carta,
+          guias: []
+        });
+      }
+
+      const lObj = rObj.lideresMap.get(lKey);
+      lObj.guias.push({
+        cuadrilla: row.cuadrilla_codigo,
+        guia: row.guia_nombre,
+        dni: row.guia_dni,
+        carta: row.guia_carta,
+        cupo: row.total_voluntarios || 9
+      });
+    });
+
+    const tree = Array.from(respMap.values()).map(r => ({
+      responsable: r.responsable,
+      dni: r.dni,
+      carta: r.carta,
+      totalCuadrillas: r.totalCuadrillas,
+      totalCapacidad: r.totalCapacidad,
+      totalLideres: r.lideresMap.size,
+      lideres: Array.from(r.lideresMap.values())
+    }));
+
+    res.json({
+      totalResponsables: tree.length,
+      totalCuadrillas: data.length,
+      totalCapacidad: data.reduce((acc, c) => acc + (c.total_voluntarios || 9), 0),
+      arbol: tree
+    });
+  } catch (err) {
+    console.error('❌ Error en /api/estructura-mandos/resumen:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en el puerto ${PORT}`);
