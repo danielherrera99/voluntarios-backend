@@ -141,6 +141,22 @@ async function syncFase2Data() {
 
   console.log(`✅ Coincidencias encontradas en Fase 1: ${generalMap.size} de ${validRows.length}`);
 
+  // Obtener el último correlativo VOL-2026-CIX para nuevos registros
+  const { data: maxCixData } = await supabase
+    .from('voluntarios')
+    .select('codigo')
+    .ilike('codigo', 'VOL-2026-CIX%')
+    .order('codigo', { ascending: false })
+    .limit(1);
+
+  let nextCixNumber = 1;
+  if (maxCixData && maxCixData.length > 0 && maxCixData[0].codigo) {
+    const match = maxCixData[0].codigo.match(/CIX(\d+)/);
+    if (match) nextCixNumber = parseInt(match[1], 10) + 1;
+  }
+
+  const f1NewRecords = [];
+
   // Construir registros para la tabla voluntarios
   const rowsToUpsert = [];
 
@@ -148,6 +164,21 @@ async function syncFase2Data() {
     const r = item.raw;
     const dni = item.dni;
     const g = generalMap.get(dni) || {};
+
+    let codigoVoluntario = g.codigo || null;
+    if (!codigoVoluntario) {
+      codigoVoluntario = `VOL-2026-CIX${String(nextCixNumber).padStart(3, '0')}`;
+      nextCixNumber++;
+      f1NewRecords.push({
+        dni: dni,
+        codigo: codigoVoluntario,
+        nombres_apellidos: String(r['NOMBRES Y APELLIDOS'] || r['APELLIDOS Y NOMBRES'] || r['Nombres y Apellidos'] || 'Sin Nombre').trim().toUpperCase(),
+        jurisdiccion: 'Chiclayo',
+        estado: 'CON_FASE2',
+        fase: '2',
+        tiene_whatsapp: false
+      });
+    }
 
     const valStr = String(r['VALIDADO'] || '').trim().toUpperCase();
     const isApproved = valStr === 'SI' || valStr === 'SÍ';
@@ -177,7 +208,7 @@ async function syncFase2Data() {
 
     const row = {
       dni: dni,
-      codigo: g.codigo || null,
+      codigo: codigoVoluntario,
       nombres_apellidos: String(r['Nombres y Apellidos'] || g.nombres_apellidos || '').trim().toUpperCase(),
       fecha_nacimiento: g.fecha_nacimiento || null,
       edad: g.edad || null,
@@ -235,6 +266,16 @@ async function syncFase2Data() {
   // Cruce y actualización en la tabla 'voluntarios_general' (Fase 1)
   console.log(`🔄 Actualizando estado de Fase 2 en 'voluntarios_general' (Fase 1)...`);
   try {
+    // 0. Si hay voluntarios nuevos sin registro en Fase 1, insertarlos primero
+    if (f1NewRecords.length > 0) {
+      console.log(`📥 Registrando ${f1NewRecords.length} nuevos voluntarios con código CIX en 'voluntarios_general'...`);
+      for (let i = 0; i < f1NewRecords.length; i += 100) {
+        const chunk = f1NewRecords.slice(i, i + 100);
+        await supabase.from('voluntarios_general').upsert(chunk, { onConflict: 'dni' });
+      }
+      console.log(`✅ ${f1NewRecords.length} nuevos voluntarios incorporados a Fase 1.`);
+    }
+
     const f2Dnis = rowsToUpsert.map(r => r.dni);
     // 1. Marcar en lotes de 500 los que sí enviaron Fase 2
     for (let i = 0; i < f2Dnis.length; i += 500) {
