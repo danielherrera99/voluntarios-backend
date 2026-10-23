@@ -65,8 +65,32 @@ const requireAdmin = (req, res, next) => {
   }
 };
 
+// Middleware para verificar que la petición proviene de alguien con rango para aprobar (Admin, Responsable, Líder)
+const requireApprover = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ msg: 'No se proporcionó token de autenticación' });
+  }
+
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+  try {
+    const decoded = jwt.verify(token, jwtSecret);
+    req.user = decoded.user;
+
+    const allowedRoles = ['admin', 'comision', 'responsable', 'lider'];
+    if (!allowedRoles.includes(req.user.rol)) {
+      return res.status(403).json({ msg: 'Acceso denegado: No tienes permisos para gestionar solicitudes de acceso.' });
+    }
+
+    next();
+  } catch (err) {
+    return res.status(401).json({ msg: 'Token inválido o expirado' });
+  }
+};
+
 // ==============================================================================
-// 0. VERIFICAR DNI EN EL PADRÓN DE VOLUNTARIOS (AUTOCOMPLETADO Y VÍNCULO)
+// 0. VERIFICAR DNI EN EL PADRÓN DE VOLUNTARIOS Y CADENA DE MANDOS (AUTOCOMPLETADO Y VÍNCULO)
 // ==============================================================================
 router.get('/verificar-dni/:dni', async (req, res) => {
   const { dni } = req.params;
@@ -77,10 +101,10 @@ router.get('/verificar-dni/:dni', async (req, res) => {
   }
 
   try {
-    // 1. Verificar si ya tiene cuenta en usuarios
+    // 1. Candado de DNI Único: Verificar si ya tiene cuenta en usuarios
     const { data: userAccount } = await supabase
       .from('usuarios')
-      .select('id, correo, estado')
+      .select('id, correo, estado, rol, nombre')
       .eq('dni', cleanDni)
       .maybeSingle();
 
@@ -90,12 +114,61 @@ router.get('/verificar-dni/:dni', async (req, res) => {
         hasAccount: true,
         accountStatus: userAccount.estado,
         msg: userAccount.estado === 'pendiente' 
-          ? 'Ya existe una solicitud pendiente con este DNI.' 
-          : 'Este DNI ya tiene una cuenta activa. Puedes iniciar sesión.'
+          ? 'Ya existe una solicitud pendiente con este DNI. Está a la espera de aprobación.' 
+          : 'Este DNI ya tiene una cuenta activa en el sistema. Puedes iniciar sesión directamente.'
       });
     }
 
-    // 2. Buscar en paralelo en ambas tablas (Fase 1 General y Fase 2)
+    // 2. Buscar si pertenece a la Cadena de Mandos Oficial (estructura_mandos)
+    const { data: mandosList } = await supabase
+      .from('estructura_mandos')
+      .select('*')
+      .or(`responsable_dni.eq.${cleanDni},lider_dni.eq.${cleanDni},guia_dni.eq.${cleanDni}`)
+      .limit(1);
+
+    let mandoInfo = null;
+    if (mandosList && mandosList.length > 0) {
+      const m = mandosList[0];
+      if (m.responsable_dni === cleanDni) {
+        mandoInfo = {
+          esMando: true,
+          cargo: 'RESPONSABLE',
+          rol: 'responsable',
+          nombre: m.responsable_nombre,
+          responsable_nombre: m.responsable_nombre,
+          lider_nombre: null,
+          guia_nombre: null,
+          cuadrilla_codigo: null,
+          etiqueta: `🎖️ Responsable General: ${m.responsable_nombre}`
+        };
+      } else if (m.lider_dni === cleanDni) {
+        mandoInfo = {
+          esMando: true,
+          cargo: 'LÍDER',
+          rol: 'lider',
+          nombre: m.lider_nombre,
+          responsable_nombre: m.responsable_nombre,
+          lider_nombre: m.lider_nombre,
+          guia_nombre: null,
+          cuadrilla_codigo: null,
+          etiqueta: `🛡️ Líder de Sector: ${m.lider_nombre} (Responsable: ${m.responsable_nombre})`
+        };
+      } else if (m.guia_dni === cleanDni) {
+        mandoInfo = {
+          esMando: true,
+          cargo: 'GUÍA',
+          rol: 'guia',
+          nombre: m.guia_nombre,
+          responsable_nombre: m.responsable_nombre,
+          lider_nombre: m.lider_nombre,
+          guia_nombre: m.guia_nombre,
+          cuadrilla_codigo: m.cuadrilla_codigo,
+          etiqueta: `🤝 Guía de Cuadrilla: ${m.guia_nombre} - Cuadrilla: ${m.cuadrilla_codigo} (Líder: ${m.lider_nombre})`
+        };
+      }
+    }
+
+    // 3. Buscar en paralelo en ambas tablas (Fase 1 General y Fase 2)
     const [resF1, resF2] = await Promise.all([
       supabase
         .from('voluntarios_general')
@@ -112,18 +185,19 @@ router.get('/verificar-dni/:dni', async (req, res) => {
     const f1 = resF1.data || null;
     const f2 = resF2.data || null;
 
-    if (f1 || f2) {
-      // Priorizar el correo y teléfono de Fase 1 (que tiene la ficha completa de inscripción)
-      const nombres = (f1?.nombres_apellidos || f2?.nombres_apellidos || '').trim();
-      const correo = (f1?.correo || f2?.correo || '').trim();
-      const telefono = (f1?.telefono || f2?.telefono || '').trim();
-      const distrito = (f1?.distrito || f2?.distrito || f1?.jurisdiccion || f2?.jurisdiccion || '').trim();
-      const fase = f2 ? 'Fase 2' : 'Fase 1';
-      const estado = f2?.estado || f1?.estado || 'REGISTRADO';
+    const nombres = (mandoInfo?.nombre || f1?.nombres_apellidos || f2?.nombres_apellidos || '').trim();
+    const correo = (f1?.correo || f2?.correo || '').trim();
+    const telefono = (f1?.telefono || f2?.telefono || '').trim();
+    const distrito = (f1?.distrito || f2?.distrito || f1?.jurisdiccion || f2?.jurisdiccion || '').trim();
+    const fase = f2 ? 'Fase 2' : (f1 ? 'Fase 1' : null);
+    const estado = f2?.estado || f1?.estado || 'REGISTRADO';
 
+    if (mandoInfo) {
       return res.json({
         existsInPadrón: true,
         hasAccount: false,
+        esMando: true,
+        mandoInfo,
         voluntario: {
           nombres,
           correo,
@@ -135,7 +209,23 @@ router.get('/verificar-dni/:dni', async (req, res) => {
       });
     }
 
-    res.json({ existsInPadrón: false, hasAccount: false });
+    if (f1 || f2) {
+      return res.json({
+        existsInPadrón: true,
+        hasAccount: false,
+        esMando: false,
+        voluntario: {
+          nombres,
+          correo,
+          telefono,
+          distrito,
+          fase,
+          estado
+        }
+      });
+    }
+
+    res.json({ existsInPadrón: false, hasAccount: false, esMando: false });
   } catch (err) {
     console.error('Error verificando DNI:', err.message);
     res.status(500).json({ error: err.message });
@@ -143,7 +233,7 @@ router.get('/verificar-dni/:dni', async (req, res) => {
 });
 
 // ==============================================================================
-// 1. SOLICITUD DE REGISTRO DE CUENTA AMARRADA A DNI (ESTILO JUFRA POMALCA)
+// 1. SOLICITUD DE REGISTRO DE CUENTA AMARRADA A DNI (CON CADENA DE MANDOS)
 // ==============================================================================
 router.post('/register', authLimiter, async (req, res) => {
   const { nombre, email, password, telefono, dni } = req.body;
@@ -181,7 +271,7 @@ router.post('/register', authLimiter, async (req, res) => {
       const existing = existingEmail[0];
       if (existing.estado === 'pendiente') {
         return res.status(400).json({
-          msg: 'Ya existe una solicitud pendiente con este correo. Por favor espera a que el Administrador la apruebe.'
+          msg: 'Ya existe una solicitud pendiente con este correo. Por favor espera a que sea aprobada.'
         });
       } else if (existing.estado === 'aprobado') {
         return res.status(400).json({
@@ -194,7 +284,7 @@ router.post('/register', authLimiter, async (req, res) => {
       }
     }
 
-    // 2. Verificar si el DNI ya está registrado en usuarios
+    // 2. Candado estricto: Verificar si el DNI ya está registrado en usuarios
     const { data: existingDni, error: dniErr } = await supabase
       .from('usuarios')
       .select('id, dni, estado')
@@ -204,15 +294,50 @@ router.post('/register', authLimiter, async (req, res) => {
 
     if (existingDni && existingDni.length > 0) {
       return res.status(400).json({
-        msg: `El DNI ${cleanDni} ya tiene una cuenta o solicitud en el sistema.`
+        msg: `El DNI ${cleanDni} ya tiene una cuenta registrada en el sistema.`
       });
     }
 
-    // 3. Encriptar contraseña
+    // 3. Buscar si este DNI pertenece a la Cadena de Mandos Oficial
+    const { data: mandosList } = await supabase
+      .from('estructura_mandos')
+      .select('*')
+      .or(`responsable_dni.eq.${cleanDni},lider_dni.eq.${cleanDni},guia_dni.eq.${cleanDni}`)
+      .limit(1);
+
+    let assignedRol = 'comision';
+    let assignedResp = null;
+    let assignedLider = null;
+    let assignedGuia = null;
+    let assignedCuadrilla = null;
+    let successCargoMsg = '¡Solicitud enviada con éxito! Tu cuenta está en revisión y debe ser aprobada antes de ingresar.';
+
+    if (mandosList && mandosList.length > 0) {
+      const m = mandosList[0];
+      if (m.responsable_dni === cleanDni) {
+        assignedRol = 'responsable';
+        assignedResp = m.responsable_nombre;
+        successCargoMsg = `¡Solicitud registrada como RESPONSABLE GENERAL! Tu cuenta está a la espera de activación por el Administrador.`;
+      } else if (m.lider_dni === cleanDni) {
+        assignedRol = 'lider';
+        assignedResp = m.responsable_nombre;
+        assignedLider = m.lider_nombre;
+        successCargoMsg = `¡Solicitud registrada como LÍDER DE SECTOR! Tu cuenta puede ser activada por tu Responsable (${m.responsable_nombre}) o por el Administrador.`;
+      } else if (m.guia_dni === cleanDni) {
+        assignedRol = 'guia';
+        assignedResp = m.responsable_nombre;
+        assignedLider = m.lider_nombre;
+        assignedGuia = m.guia_nombre;
+        assignedCuadrilla = m.cuadrilla_codigo;
+        successCargoMsg = `¡Solicitud registrada como GUÍA DE CUADRILLA (${m.cuadrilla_codigo})! Tu cuenta puede ser activada por tu Líder (${m.lider_nombre}), tu Responsable o por el Administrador.`;
+      }
+    }
+
+    // 4. Encriptar contraseña
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
 
-    // 4. Insertar usuario amarrado a su DNI en estado 'pendiente'
+    // 5. Insertar usuario amarrado a su DNI y datos jerárquicos en estado 'pendiente'
     const { data: newUser, error: insertErr } = await supabase
       .from('usuarios')
       .insert([
@@ -222,11 +347,15 @@ router.post('/register', authLimiter, async (req, res) => {
           correo: cleanEmail,
           password_hash,
           telefono: telefono ? telefono.trim() : null,
-          rol: 'comision',
-          estado: 'pendiente'
+          rol: assignedRol,
+          estado: 'pendiente',
+          responsable_nombre: assignedResp,
+          lider_nombre: assignedLider,
+          guia_nombre: assignedGuia,
+          cuadrilla_codigo: assignedCuadrilla
         }
       ])
-      .select('id, dni, nombre, correo, estado, created_at')
+      .select('id, dni, nombre, correo, rol, estado, responsable_nombre, lider_nombre, guia_nombre, cuadrilla_codigo, created_at')
       .single();
 
     if (insertErr) throw insertErr;
@@ -236,12 +365,21 @@ router.post('/register', authLimiter, async (req, res) => {
       req,
       usuario: newUser,
       accion: 'REGISTRO_SOLICITUD',
-      detalles: { dni: cleanDni, nombre: nombre.trim(), correo: cleanEmail, telefono }
+      detalles: { 
+        dni: cleanDni, 
+        nombre: nombre.trim(), 
+        correo: cleanEmail, 
+        telefono,
+        rol: assignedRol,
+        cuadrilla: assignedCuadrilla,
+        responsable: assignedResp,
+        lider: assignedLider
+      }
     });
 
     res.status(201).json({
       success: true,
-      msg: '¡Solicitud enviada con éxito! Tu cuenta está en revisión y debe ser aprobada por el Administrador antes de ingresar.',
+      msg: successCargoMsg,
       usuario: newUser
     });
   } catch (error) {
@@ -321,8 +459,10 @@ router.post('/login', authLimiter, async (req, res) => {
         rol: user.rol || 'comision',
         estado: user.estado || 'aprobado',
         telefono: user.telefono || null,
+        responsable_nombre: user.responsable_nombre || null,
         lider_nombre: user.lider_nombre || null,
-        coordinador_nombre: user.coordinador_nombre || null
+        guia_nombre: user.guia_nombre || null,
+        cuadrilla_codigo: user.cuadrilla_codigo || null
       }
     };
 
@@ -351,15 +491,15 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ==============================================================================
-// 3. MÓDULO EXCLUSIVO PARA ADMINISTRADOR: GESTIÓN DE SOLICITUDES Y USUARIOS
+// 3. GESTIÓN DE SOLICITUDES Y USUARIOS (ADMINISTRADOR Y DELEGACIÓN JERÁRQUICA)
 // ==============================================================================
 
-// Obtener todas las solicitudes y usuarios enriquecidos con su estado en el Padrón
-router.get('/solicitudes', requireAdmin, async (req, res) => {
+// Obtener solicitudes y usuarios enriquecidos, filtrados según el rol del usuario (Admin ve todo, Responsable ve su sector, Líder ve sus guías)
+router.get('/solicitudes', requireApprover, async (req, res) => {
   try {
     const { data: allUsers, error } = await supabase
       .from('usuarios')
-      .select('id, dni, nombre, correo, telefono, rol, estado, created_at, lider_nombre, coordinador_nombre')
+      .select('id, dni, nombre, correo, telefono, rol, estado, created_at, responsable_nombre, lider_nombre, guia_nombre, cuadrilla_codigo')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -408,16 +548,34 @@ router.get('/solicitudes', requireAdmin, async (req, res) => {
       };
     });
 
-    const pendientes = enrichedUsers.filter(u => u.estado === 'pendiente');
-    const aprobados = enrichedUsers.filter(u => u.estado === 'aprobado');
-    const rechazados = enrichedUsers.filter(u => u.estado === 'rechazado');
+    // Filtrar según el alcance jerárquico del usuario solicitante
+    let filteredUsers = enrichedUsers;
+    const userRol = req.user.rol;
+    const userNombre = String(req.user.nombre || '').trim().toUpperCase();
+
+    if (userRol === 'responsable') {
+      filteredUsers = enrichedUsers.filter(u => {
+        const rName = String(u.responsable_nombre || '').trim().toUpperCase();
+        return rName === userNombre || u.dni === req.user.dni;
+      });
+    } else if (userRol === 'lider') {
+      filteredUsers = enrichedUsers.filter(u => {
+        const lName = String(u.lider_nombre || '').trim().toUpperCase();
+        return lName === userNombre || u.dni === req.user.dni;
+      });
+    }
+
+    const pendientes = filteredUsers.filter(u => u.estado === 'pendiente');
+    const aprobados = filteredUsers.filter(u => u.estado === 'aprobado');
+    const rechazados = filteredUsers.filter(u => u.estado === 'rechazado');
 
     res.json({
       pendientes,
       aprobados,
       rechazados,
       totalPendientes: pendientes.length,
-      totalAprobados: aprobados.length
+      totalAprobados: aprobados.length,
+      rolAprobador: userRol
     });
   } catch (error) {
     console.error('Error obteniendo solicitudes:', error.message);
@@ -425,20 +583,48 @@ router.get('/solicitudes', requireAdmin, async (req, res) => {
   }
 });
 
-// Aprobar una solicitud
-router.put('/solicitudes/:id/aprobar', requireAdmin, async (req, res) => {
+// Aprobar una solicitud (con validación de permisos jerárquicos)
+router.put('/solicitudes/:id/aprobar', requireApprover, async (req, res) => {
   const { id } = req.params;
-  const { rol = 'comision' } = req.body;
+  const { rol } = req.body;
 
   try {
+    const { data: targetUser, error: findErr } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !targetUser) {
+      return res.status(404).json({ msg: 'Usuario no encontrado' });
+    }
+
+    // Validación de alcance jerárquico
+    const approverRol = req.user.rol;
+    const approverNombre = String(req.user.nombre || '').trim().toUpperCase();
+
+    if (approverRol === 'lider') {
+      const targetLider = String(targetUser.lider_nombre || '').trim().toUpperCase();
+      if (targetLider !== approverNombre) {
+        return res.status(403).json({ msg: 'No tienes autorización para aprobar usuarios fuera de tu equipo de Guías.' });
+      }
+    } else if (approverRol === 'responsable') {
+      const targetResp = String(targetUser.responsable_nombre || '').trim().toUpperCase();
+      if (targetResp !== approverNombre) {
+        return res.status(403).json({ msg: 'No tienes autorización para aprobar usuarios fuera de tu sector o zona.' });
+      }
+    }
+
+    const finalRol = rol || targetUser.rol || 'guia';
+
     const { data, error } = await supabase
       .from('usuarios')
       .update({
         estado: 'aprobado',
-        rol: rol
+        rol: finalRol
       })
       .eq('id', id)
-      .select('id, dni, nombre, correo, rol, estado')
+      .select('id, dni, nombre, correo, rol, estado, responsable_nombre, lider_nombre, guia_nombre, cuadrilla_codigo')
       .single();
 
     if (error) throw error;
@@ -450,7 +636,9 @@ router.put('/solicitudes/:id/aprobar', requireAdmin, async (req, res) => {
         usuario_aprobado_id: id,
         nombre: data.nombre,
         dni: data.dni,
-        rol: data.rol
+        rol: data.rol,
+        aprobado_por_rol: approverRol,
+        aprobado_por_nombre: approverNombre
       }
     });
 
@@ -465,11 +653,36 @@ router.put('/solicitudes/:id/aprobar', requireAdmin, async (req, res) => {
   }
 });
 
-// Rechazar una solicitud
-router.put('/solicitudes/:id/rechazar', requireAdmin, async (req, res) => {
+// Rechazar una solicitud (con validación de permisos jerárquicos)
+router.put('/solicitudes/:id/rechazar', requireApprover, async (req, res) => {
   const { id } = req.params;
 
   try {
+    const { data: targetUser, error: findErr } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !targetUser) {
+      return res.status(404).json({ msg: 'Usuario no encontrado' });
+    }
+
+    const approverRol = req.user.rol;
+    const approverNombre = String(req.user.nombre || '').trim().toUpperCase();
+
+    if (approverRol === 'lider') {
+      const targetLider = String(targetUser.lider_nombre || '').trim().toUpperCase();
+      if (targetLider !== approverNombre) {
+        return res.status(403).json({ msg: 'No tienes autorización para rechazar usuarios fuera de tu equipo.' });
+      }
+    } else if (approverRol === 'responsable') {
+      const targetResp = String(targetUser.responsable_nombre || '').trim().toUpperCase();
+      if (targetResp !== approverNombre) {
+        return res.status(403).json({ msg: 'No tienes autorización para rechazar usuarios fuera de tu sector.' });
+      }
+    }
+
     const { data, error } = await supabase
       .from('usuarios')
       .update({ estado: 'rechazado' })
