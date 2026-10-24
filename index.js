@@ -835,3 +835,6 @@ app.listen(PORT, () => {
       .catch(err => console.warn('⚠️ [Keep-Alive] Falló el ping:', err.message));
   }, 10 * 60 * 1000);
 });
+
+module.exports = app;
+
