@@ -29,6 +29,7 @@ app.use(cors({
       origin.endsWith('.web.app') ||
       origin.endsWith('.firebaseapp.com') ||
       origin.endsWith('.onrender.com') ||
+      origin.endsWith('.vercel.app') ||
       origin.includes('localhost')
     ) {
       return callback(null, true);
