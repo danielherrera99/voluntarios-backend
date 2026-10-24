@@ -18,7 +18,9 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:4173',
   'https://voluntarios-chiclayo.web.app',
-  'https://voluntarios-web.onrender.com'
+  'https://voluntarios-web.onrender.com',
+  'https://diocesischiclayo.org',
+  'https://www.diocesischiclayo.org'
 ];
 
 app.use(cors({
@@ -26,6 +28,7 @@ app.use(cors({
     if (!origin) return callback(null, true);
     if (
       allowedOrigins.indexOf(origin) !== -1 ||
+      origin.includes('diocesischiclayo.org') ||
       origin.endsWith('.web.app') ||
       origin.endsWith('.firebaseapp.com') ||
       origin.endsWith('.onrender.com') ||
