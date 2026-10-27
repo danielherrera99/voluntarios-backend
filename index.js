@@ -134,6 +134,76 @@ app.get('/api/voluntarios', requireAuth, async (req, res) => {
   }
 });
 
+// Endpoint exclusivo de Administrador para eliminar un registro (Fase 1 o Fase 2 / Seleccionados / Duplicados)
+app.delete('/api/voluntarios/:fase/:id', requireAdmin, async (req, res) => {
+  try {
+    const { fase, id } = req.params;
+    const { motivo } = req.body || {};
+
+    let tableName;
+    let faseNombre;
+    if (fase === 'fase1' || fase === 'voluntarios_general') {
+      tableName = 'voluntarios_general';
+      faseNombre = 'Fase 1 (Padrón General)';
+    } else if (fase === 'fase2' || fase === 'voluntarios') {
+      tableName = 'voluntarios';
+      faseNombre = 'Fase 2 (Formulario Oficial / Seleccionados)';
+    } else {
+      return res.status(400).json({ error: 'Fase no válida. Debe ser "fase1" o "fase2".' });
+    }
+
+    // 1. Obtener los datos del voluntario antes de borrarlo para la auditoría y respuesta
+    const { data: vol, error: fetchErr } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!vol) {
+      return res.status(404).json({ error: 'El registro no fue encontrado o ya fue eliminado.' });
+    }
+
+    // 2. Ejecutar la eliminación física del registro
+    const { error: delErr } = await supabase
+      .from(tableName)
+      .delete()
+      .eq('id', id);
+
+    if (delErr) throw delErr;
+
+    // 3. Registrar en auditoria_logs
+    await logAudit({
+      req,
+      accion: `ELIMINAR_VOLUNTARIO_${fase.toUpperCase()}`,
+      detalles: {
+        id: vol.id,
+        dni: vol.dni,
+        nombres_apellidos: vol.nombres_apellidos,
+        fase: faseNombre,
+        estado: vol.estado,
+        motivo: motivo || 'Depuración de duplicado o registro erróneo por Administrador'
+      }
+    });
+
+    console.log(`🗑️ [Auditoría] Administrador eliminó a ${vol.nombres_apellidos} (DNI: ${vol.dni}) de ${faseNombre}`);
+
+    res.json({
+      success: true,
+      msg: `Registro de ${vol.nombres_apellidos} (DNI: ${vol.dni}) eliminado correctamente de ${faseNombre}.`,
+      voluntarioEliminado: {
+        id: vol.id,
+        dni: vol.dni,
+        nombres_apellidos: vol.nombres_apellidos,
+        fase: faseNombre
+      }
+    });
+  } catch (err) {
+    console.error('❌ Error eliminando voluntario:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Consultar padrón general por DNI (Fase 1) - Con rate limit anti-scraping
 app.get('/api/voluntarios-general/:dni', consultaLimiter, async (req, res) => {
   try {
