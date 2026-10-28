@@ -284,10 +284,17 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
     if (f2Error) throw f2Error;
 
     if (f2Data) {
+      const valStr = String(f2Data.estado || '').toUpperCase();
+      const isRejected = valStr.includes('NO') || valStr.includes('RECHAZ');
+      const isSelected = !isRejected && (f2Data.info_validada || valStr === 'SELECCIONADO' || valStr.includes('APROBAD'));
+      const isVerificar = !isRejected && (valStr.includes('REVISI') || valStr.includes('OBSERV') || valStr.includes('VERIFICAR') || Boolean(f2Data.observacion));
+
       let status = 'PENDING';
-      if (f2Data.info_validada || f2Data.estado === 'SELECCIONADO') {
+      if (isSelected) {
         status = 'SELECTED';
-      } else if (f2Data.estado === 'EN REVISIÓN') {
+      } else if (isRejected) {
+        status = 'NOT_SELECTED';
+      } else if (isVerificar) {
         status = 'PENDING';
       }
 
@@ -295,12 +302,14 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         found: true,
         fase: f2Data.fase || '2',
         status: status,
+        esVerificar: isVerificar,
+        estado: f2Data.estado,
         name: f2Data.nombres_apellidos,
         dni: f2Data.dni,
         codigo: f2Data.codigo,
         comision: f2Data.servicio || 'Servicio General',
         area: f2Data.departamento || 'Diócesis de Chiclayo',
-        observacion: f2Data.observacion,
+        observacion: f2Data.observacion || null,
         info_validada: f2Data.info_validada
       });
     }

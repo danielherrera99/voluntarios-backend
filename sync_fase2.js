@@ -63,6 +63,35 @@ function getUrl(r, term) {
   return null;
 }
 
+function getObservationFromRow(r) {
+  const parts = [];
+  for (const [k, v] of Object.entries(r)) {
+    if (!v) continue;
+    const key = k.toLowerCase().trim();
+    const val = String(v).trim();
+    if (!val) continue;
+
+    // Ignorar urls de drive o valores de columnas fijas conocidas
+    if (val.startsWith('http')) continue;
+    if (key.includes('marca temporal') || key.includes('nombre') || key.includes('dni') || key === 'validado') continue;
+    if (val === 'LAMBAYEQUE' || val === 'UNI' || val === 'NO' || val === 'SI' || val === 'SÍ') continue;
+
+    if (
+      key.includes('observaci') ||
+      key.includes('criterio') ||
+      key.includes('columna 10') ||
+      key.includes('obs') ||
+      key.includes('motivo') ||
+      key.includes('verificar')
+    ) {
+      if (!parts.includes(val)) {
+        parts.push(val);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(' | ') : null;
+}
+
 async function syncFase2Data() {
   console.log(`\n======================================================`);
   console.log(`🚀 SINCRONIZACIÓN DE FASE 2 DESDE GOOGLE SHEETS`);
@@ -99,14 +128,20 @@ async function syncFase2Data() {
 
     const valStr = String(r['VALIDADO'] || '').trim().toUpperCase();
     const isApproved = valStr === 'SI' || valStr === 'SÍ';
+    const isVerificar = valStr.includes('VERIFICAR');
 
     if (!validMap.has(dni)) {
       validMap.set(dni, r);
     } else {
-      // Si el anterior no estaba validado pero este nuevo sí, reemplazarlo
       const prevValStr = String(validMap.get(dni)['VALIDADO'] || '').trim().toUpperCase();
       const prevApproved = prevValStr === 'SI' || prevValStr === 'SÍ';
+      const prevVerificar = prevValStr.includes('VERIFICAR');
+
       if (!prevApproved && isApproved) {
+        validMap.set(dni, r);
+      } else if (!prevApproved && !prevVerificar && isVerificar) {
+        validMap.set(dni, r);
+      } else if (!prevApproved && !isApproved) {
         validMap.set(dni, r);
       }
     }
@@ -199,12 +234,8 @@ async function syncFase2Data() {
       fase = '2';
     }
 
-    // Unir observaciones
-    const obsParts = [];
-    if (r['OBSERVACION']) obsParts.push(String(r['OBSERVACION']).trim());
-    if (r['CRITERIO DE OBSERVACIÃ\x93N']) obsParts.push(String(r['CRITERIO DE OBSERVACIÃ\x93N']).trim());
-    if (r['CRITERIO DE OBSERVACIÓN']) obsParts.push(String(r['CRITERIO DE OBSERVACIÓN']).trim());
-    const observacion = obsParts.length > 0 ? obsParts.join(' | ') : null;
+    // Extraer observaciones (Columna 10, Criterio de observación, etc.)
+    const observacion = getObservationFromRow(r);
 
     const row = {
       dni: dni,
