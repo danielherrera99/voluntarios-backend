@@ -93,12 +93,14 @@ async function run() {
     // Saltar cabeceras intermedias
     if (isHeader(col0) || isHeader(col3) || isHeader(col6)) continue;
 
+    // Si aparece un nuevo responsable
     if (col0 && col0.length > 2) {
       currentResp = {
         nombre: col0.toUpperCase(),
         dni: cleanDni(row[1]),
         carta: row[2] ? String(row[2]).trim().toUpperCase() : null
       };
+      currentLider = null; // Un nuevo responsable no debe arrastrar el líder del responsable anterior
     }
 
     if (col3 && col3.length > 2) {
@@ -109,7 +111,27 @@ async function run() {
       };
     }
 
-    if (col6 && col6.length > 2) {
+    // Si aún no hay líder asignado en esta fila pero hay un líder más abajo en el bloque de este responsable
+    let assignedLider = currentLider;
+    if (!assignedLider && currentResp) {
+      for (let j = i; j < Math.min(i + 15, data.length); j++) {
+        const nextCol0 = data[j] && data[j][0] ? String(data[j][0]).trim() : '';
+        if (j > i && nextCol0 && nextCol0.length > 2 && !isHeader(nextCol0)) break; // Comenzó otro responsable
+        const nextCol3 = data[j] && data[j][3] ? String(data[j][3]).trim() : '';
+        if (nextCol3 && nextCol3.length > 2 && !isHeader(nextCol3)) {
+          assignedLider = {
+            nombre: nextCol3.toUpperCase(),
+            dni: cleanDni(data[j][4]),
+            carta: data[j][5] ? String(data[j][5]).trim().toUpperCase() : null
+          };
+          currentLider = assignedLider;
+          break;
+        }
+      }
+    }
+
+    // Registrar guía / cuadrilla (descartando filas que solo sean números como '733')
+    if (col6 && col6.length > 2 && isNaN(Number(col6))) {
       const dniGuia = cleanDni(row[7]);
       const cartaGuia = row[8] ? String(row[8]).trim().toUpperCase() : null;
       const tv = row[9] ? parseInt(row[9], 10) : 9;
@@ -122,9 +144,9 @@ async function run() {
         responsable_nombre: currentResp ? currentResp.nombre : 'SIN ASIGNAR',
         responsable_dni: currentResp ? currentResp.dni : null,
         responsable_carta: currentResp && (currentResp.carta === 'SI' || currentResp.carta === 'SÍ'),
-        lider_nombre: currentLider ? currentLider.nombre : 'SIN ASIGNAR',
-        lider_dni: currentLider ? currentLider.dni : null,
-        lider_carta: currentLider && (currentLider.carta === 'SI' || currentLider.carta === 'SÍ'),
+        lider_nombre: assignedLider ? assignedLider.nombre : (currentResp ? currentResp.nombre : 'SIN ASIGNAR'),
+        lider_dni: assignedLider ? assignedLider.dni : null,
+        lider_carta: assignedLider && (assignedLider.carta === 'SI' || assignedLider.carta === 'SÍ'),
         guia_nombre: col6.toUpperCase(),
         guia_dni: dniGuia,
         guia_carta: cartaGuia === 'SI' || cartaGuia === 'SÍ',
