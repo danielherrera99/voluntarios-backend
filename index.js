@@ -42,7 +42,16 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Configuración de Cloudinary para almacenamiento de afiches y multimedia
+const cloudinary = require('cloudinary').v2;
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // 3. Limitadores de Tasa (Rate Limiting)
 const generalLimiter = rateLimit({
@@ -896,6 +905,37 @@ app.get('/api/estructura-mandos/resumen', async (req, res) => {
   } catch (err) {
     console.error('❌ Error en /api/estructura-mandos/resumen:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para subir afiches/banners a Cloudinary (Gestión de Capacitaciones)
+app.post('/api/upload-banner-cloudinary', async (req, res) => {
+  try {
+    const { imageBase64, sede } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'No se envió la imagen en base64' });
+    }
+
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      console.warn('⚠️ Cloudinary no está configurado en las variables de entorno');
+      return res.status(500).json({ 
+        error: 'Cloudinary no está configurado en las variables de entorno del servidor (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET).' 
+      });
+    }
+
+    const uploadRes = await cloudinary.uploader.upload(imageBase64, {
+      folder: 'voluntariado_banners',
+      public_id: `banner_${sede || 'general'}_${Date.now()}`
+    });
+
+    res.json({ 
+      success: true, 
+      url: uploadRes.secure_url,
+      public_id: uploadRes.public_id 
+    });
+  } catch (err) {
+    console.error('❌ Error subiendo banner a Cloudinary:', err);
+    res.status(500).json({ error: err.message || 'Error al procesar la subida a Cloudinary' });
   }
 });
 
