@@ -916,10 +916,15 @@ app.post('/api/upload-banner-cloudinary', async (req, res) => {
       return res.status(400).json({ error: 'No se envió la imagen en base64' });
     }
 
-    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-      console.warn('⚠️ Cloudinary no está configurado en las variables de entorno');
+    const missingVars = [];
+    if (!process.env.CLOUDINARY_CLOUD_NAME) missingVars.push('CLOUDINARY_CLOUD_NAME');
+    if (!process.env.CLOUDINARY_API_KEY) missingVars.push('CLOUDINARY_API_KEY');
+    if (!process.env.CLOUDINARY_API_SECRET) missingVars.push('CLOUDINARY_API_SECRET');
+
+    if (missingVars.length > 0) {
+      console.warn('⚠️ Variables de Cloudinary faltantes:', missingVars);
       return res.status(500).json({ 
-        error: 'Cloudinary no está configurado en las variables de entorno del servidor (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET).' 
+        error: `Cloudinary no está activo en el backend de Vercel. Faltan en Environment Variables: ${missingVars.join(', ')}` 
       });
     }
 
