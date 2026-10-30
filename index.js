@@ -216,6 +216,90 @@ app.delete('/api/voluntarios/:fase/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// Endpoint exclusivo de Administrador para editar un registro (Fase 1 o Fase 2)
+app.put('/api/voluntarios/:fase/:id', requireAdmin, async (req, res) => {
+  try {
+    const { fase, id } = req.params;
+    const body = req.body || {};
+
+    let tableName;
+    let faseNombre;
+    if (fase === 'fase1' || fase === 'voluntarios_general') {
+      tableName = 'voluntarios_general';
+      faseNombre = 'Fase 1 (Padrón General)';
+    } else if (fase === 'fase2' || fase === 'voluntarios') {
+      tableName = 'voluntarios';
+      faseNombre = 'Fase 2 (Formulario Oficial / Seleccionados)';
+    } else {
+      return res.status(400).json({ error: 'Fase no válida. Debe ser "fase1" o "fase2".' });
+    }
+
+    // 1. Obtener registro actual
+    const { data: currentVol, error: fetchErr } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!currentVol) {
+      return res.status(404).json({ error: 'El registro no fue encontrado.' });
+    }
+
+    // 2. Extraer solo campos permitidos y existentes en la tabla
+    const validColumns = Object.keys(currentVol);
+    const updatePayload = {};
+
+    for (const [key, val] of Object.entries(body)) {
+      if (validColumns.includes(key) && key !== 'id' && key !== 'created_at') {
+        updatePayload[key] = typeof val === 'string' ? val.trim() : val;
+      }
+    }
+
+    if (Object.keys(updatePayload).length === 0) {
+      return res.status(400).json({ error: 'No se enviaron campos válidos para actualizar.' });
+    }
+
+    // 3. Ejecutar actualización
+    const { data: updatedVol, error: updErr } = await supabase
+      .from(tableName)
+      .update(updatePayload)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updErr) throw updErr;
+
+    // 4. Registrar en auditoria_logs
+    await logAudit({
+      req,
+      accion: `EDITAR_VOLUNTARIO_${fase.toUpperCase()}`,
+      detalles: {
+        id,
+        dni: updatedVol.dni,
+        nombres_apellidos: updatedVol.nombres_apellidos,
+        fase: faseNombre,
+        campos_modificados: Object.keys(updatePayload),
+        valores_previos: Object.fromEntries(
+          Object.keys(updatePayload).map(k => [k, currentVol[k]])
+        ),
+        valores_nuevos: updatePayload
+      }
+    });
+
+    console.log(`✏️ [Auditoría] Administrador editó a ${updatedVol.nombres_apellidos} (DNI: ${updatedVol.dni}) en ${faseNombre}`);
+
+    res.json({
+      success: true,
+      msg: `Registro de ${updatedVol.nombres_apellidos} actualizado correctamente.`,
+      voluntario: updatedVol
+    });
+  } catch (err) {
+    console.error('❌ Error editando voluntario:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Consultar padrón general por DNI (Fase 1) - Con rate limit anti-scraping
 app.get('/api/voluntarios-general/:dni', consultaLimiter, async (req, res) => {
   try {
