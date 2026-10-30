@@ -53,6 +53,9 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// Servicio de Sincronización de Jerarquía y Mandos desde Google Sheets
+const { fetchAndParseGoogleSheets, compareHierarchy } = require('./sync_jerarquia_service');
+
 // 3. Limitadores de Tasa (Rate Limiting)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -941,6 +944,84 @@ app.post('/api/upload-banner-cloudinary', async (req, res) => {
   } catch (err) {
     console.error('❌ Error subiendo banner a Cloudinary:', err);
     res.status(500).json({ error: err.message || 'Error al procesar la subida a Cloudinary' });
+  }
+});
+
+// Endpoint 1: Analizar cambios entre Google Sheets y la base de datos (Pre-visualización / Diff Report)
+app.post('/api/estructura-mandos/analizar-cambios', async (req, res) => {
+  try {
+    console.log('🔄 [Jerarquía] Analizando diferencias con Google Sheets...');
+    const newRecords = await fetchAndParseGoogleSheets();
+    
+    const { data: dbCurrent, error: dbErr } = await supabase
+      .from('estructura_mandos')
+      .select('*')
+      .order('id', { ascending: true });
+
+    if (dbErr) throw dbErr;
+
+    const diff = compareHierarchy(newRecords, dbCurrent || []);
+    res.json({ success: true, ...diff });
+  } catch (err) {
+    console.error('❌ Error analizando cambios de jerarquía:', err);
+    res.status(500).json({ error: err.message || 'Error al conectar con Google Sheets' });
+  }
+});
+
+// Endpoint 2: Aplicar la sincronización oficial confirmada por el Administrador
+app.post('/api/estructura-mandos/aplicar-cambios', async (req, res) => {
+  try {
+    console.log('🚀 [Jerarquía] Aplicando sincronización oficial confirmada...');
+    const records = await fetchAndParseGoogleSheets();
+
+    if (!records || records.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron registros en el Google Sheet' });
+    }
+
+    // 1. Crear backup previo
+    const backupName = `estructura_mandos_backup_${Date.now()}`;
+    await supabase.rpc('exec_sql', {
+      sql: `CREATE TABLE IF NOT EXISTS ${backupName} AS TABLE estructura_mandos;`
+    });
+
+    // 2. Limpiar tabla actual
+    const { error: delErr } = await supabase.from('estructura_mandos').delete().neq('id', 0);
+    if (delErr) throw delErr;
+
+    // 3. Insertar nuevos registros en lotes de 100
+    for (let i = 0; i < records.length; i += 100) {
+      const chunk = records.slice(i, i + 100);
+      const { error: insErr } = await supabase.from('estructura_mandos').insert(chunk);
+      if (insErr) throw insErr;
+    }
+
+    // 4. Sincronizar usuarios líderes si cambiaron nombres ortográficos
+    const { data: users } = await supabase.from('usuarios').select('id, dni, lider_nombre, responsable_nombre');
+    if (users) {
+      for (const u of users) {
+        if (u.dni) {
+          const m = records.find(r => r.lider_dni === u.dni);
+          if (m && (m.lider_nombre !== u.lider_nombre || m.responsable_nombre !== u.responsable_nombre)) {
+            await supabase.from('usuarios').update({
+              nombre: m.lider_nombre,
+              lider_nombre: m.lider_nombre,
+              responsable_nombre: m.responsable_nombre
+            }).eq('id', u.id);
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Base de datos sincronizada exitosamente con Google Sheets',
+      totalCuadrillas: records.length,
+      totalResponsables: new Set(records.map(r => r.responsable_nombre)).size,
+      totalLideres: new Set(records.map(r => r.lider_nombre)).size
+    });
+  } catch (err) {
+    console.error('❌ Error aplicando sincronización de jerarquía:', err);
+    res.status(500).json({ error: err.message || 'Error al aplicar cambios' });
   }
 });
 
