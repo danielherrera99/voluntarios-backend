@@ -71,7 +71,7 @@ async function run() {
 
   for (let sIdx = 0; sIdx < wb.SheetNames.length; sIdx++) {
     const sheetName = wb.SheetNames[sIdx];
-    if (sheetName === 'SANTA CRUZ' || sheetName === 'SR. PEDRO') continue;
+    if (sheetName === 'SANTA CRUZ') continue; // Solo omitir SANTA CRUZ (vacía)
 
     const sheet = wb.Sheets[sheetName];
     const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
@@ -241,3 +241,4 @@ async function run() {
 }
 
 run().catch(console.error);
+
