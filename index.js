@@ -582,6 +582,140 @@ app.get('/api/collaborators-stats', async (req, res) => {
   }
 });
 
+// Endpoint para repartir equitativamente los voluntarios observados de Fase 2 entre colaboradores (Protegido)
+app.post('/api/distribute-voluntarios-obs', requireAuth, async (req, res) => {
+  try {
+    const { collaborators } = req.body;
+    if (!collaborators || !Array.isArray(collaborators) || collaborators.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar una lista de colaboradores' });
+    }
+
+    const cleanNames = collaborators.map(c => String(c).trim()).filter(Boolean);
+    if (cleanNames.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron nombres válidos' });
+    }
+
+    console.log(`⚡ Iniciando reparto de observados entre ${cleanNames.length} colaboradores:`, cleanNames);
+
+    // 1. Obtener los voluntarios de Fase 2 en observación que AÚN NO han sido contactados
+    let allIds = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from('voluntarios')
+        .select('id, contactado_obs')
+        .ilike('estado', '%REVISI%')
+        .or('contactado_obs.is.null,contactado_obs.eq.false')
+        .order('nombres_apellidos', { ascending: true })
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allIds.push(...data.map(d => d.id));
+      if (data.length < size) break;
+      page++;
+    }
+
+    const total = allIds.length;
+    const numCollaborators = cleanNames.length;
+    const chunkSize = Math.ceil(total / numCollaborators);
+
+    console.log(`📊 Total observados a repartir: ${total} (~${chunkSize} por persona)`);
+
+    const distributionSummary = [];
+
+    for (let i = 0; i < numCollaborators; i++) {
+      const collaboratorName = cleanNames[i];
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, total);
+      const collaboratorIds = allIds.slice(start, end);
+
+      if (collaboratorIds.length > 0) {
+        for (let j = 0; j < collaboratorIds.length; j += 200) {
+          const subChunk = collaboratorIds.slice(j, j + 200);
+          const { error: upErr } = await supabase
+            .from('voluntarios')
+            .update({ colaborador_asignado: collaboratorName })
+            .in('id', subChunk);
+
+          if (upErr) console.warn(`⚠️ Error asignando a ${collaboratorName}:`, upErr.message);
+        }
+
+        distributionSummary.push({
+          name: collaboratorName,
+          count: collaboratorIds.length
+        });
+      }
+    }
+
+    await logAudit({
+      req,
+      accion: 'REPARTO_OBSERVADOS_FASE2',
+      detalles: {
+        totalAsignados: total,
+        totalColaboradores: numCollaborators,
+        resumen: distributionSummary
+      }
+    });
+
+    res.json({
+      success: true,
+      total,
+      collaborators: distributionSummary
+    });
+  } catch (err) {
+    console.error('❌ Error en distribute-voluntarios-obs:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para estadísticas de observados por colaborador en Fase 2
+app.get('/api/collaborators-obs-stats', async (req, res) => {
+  try {
+    let allRows = [];
+    let page = 0;
+    const size = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from('voluntarios')
+        .select('colaborador_asignado, contactado_obs')
+        .ilike('estado', '%REVISI%')
+        .range(page * size, (page + 1) * size - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows.push(...data);
+      if (data.length < size) break;
+      page++;
+    }
+
+    const statsMap = {};
+    for (const r of allRows) {
+      const name = (r.colaborador_asignado && String(r.colaborador_asignado).trim()) ? String(r.colaborador_asignado).trim() : 'Sin asignar';
+      if (!statsMap[name]) {
+        statsMap[name] = { name, total: 0, contactados: 0, pendientes: 0 };
+      }
+      statsMap[name].total++;
+      if (r.contactado_obs) {
+        statsMap[name].contactados++;
+      } else {
+        statsMap[name].pendientes++;
+      }
+    }
+
+    const result = Object.values(statsMap).map(s => ({
+      ...s,
+      porcentaje: s.total > 0 ? Math.round((s.contactados / s.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error en collaborators-obs-stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 
 // Endpoint para chocolotear / repartir equitativamente entre Líderes y Cuadrillas
