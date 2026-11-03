@@ -55,6 +55,7 @@ cloudinary.config({
 
 // Servicio de Sincronización de Jerarquía y Mandos desde Google Sheets
 const { fetchAndParseGoogleSheets, compareHierarchy } = require('./sync_jerarquia_service');
+const { syncAsignacionesVoluntarios } = require('./sync_asignacion_service');
 
 // 3. Limitadores de Tasa (Rate Limiting)
 const generalLimiter = rateLimit({
@@ -1240,6 +1241,29 @@ app.post('/api/estructura-mandos/aplicar-cambios', async (req, res) => {
   } catch (err) {
     console.error('❌ Error aplicando sincronización de jerarquía:', err);
     res.status(500).json({ error: err.message || 'Error al aplicar cambios' });
+  }
+});
+
+// Endpoint: Sincronizar Asignaciones de Voluntarios y Sedes desde su Google Sheet exclusivo
+app.post('/api/sync-asignaciones-voluntarios', requireAdmin, async (req, res) => {
+  try {
+    console.log('🚀 [Asignaciones] Iniciando sincronización de asignaciones y sedes desde Google Sheets...');
+    const result = await syncAsignacionesVoluntarios();
+
+    await logAudit({
+      req,
+      accion: 'SYNC_ASIGNACIONES_SHEETS',
+      detalles: result
+    });
+
+    res.json({
+      success: true,
+      message: 'Asignaciones de voluntarios sincronizadas exitosamente sin alterar registros previos.',
+      ...result
+    });
+  } catch (err) {
+    console.error('❌ Error en sync-asignaciones-voluntarios:', err);
+    res.status(500).json({ error: err.message || 'Error al sincronizar asignaciones de voluntarios' });
   }
 });
 
