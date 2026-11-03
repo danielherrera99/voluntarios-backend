@@ -53,6 +53,11 @@ function downloadBuffer(url) {
   });
 }
 
+function escapeSql(str) {
+  if (str === null || str === undefined) return 'NULL';
+  return `'${String(str).replace(/'/g, "''")}'`;
+}
+
 async function syncAsignacionesVoluntarios() {
   console.log('1. Descargando hoja oficial de Asignaciones de Voluntarios...');
   const buf = await downloadBuffer(ASIGNACION_SHEET_URL);
@@ -69,8 +74,7 @@ async function syncAsignacionesVoluntarios() {
   let asignadosSede = 0;
   let sinLugar = 0;
 
-  // Organizar mapa de actualizaciones por DNI
-  const updatesMap = new Map();
+  const itemsToUpdate = [];
 
   for (const r of dataRows) {
     const dni = String(r[5]).trim();
@@ -90,60 +94,56 @@ async function syncAsignacionesVoluntarios() {
       } else {
         lugar = rawLugar;
       }
+      itemsToUpdate.push({ dni, lider, lugar });
     } else {
       sinLugar++;
     }
-
-    updatesMap.set(dni, { lider, lugar });
   }
 
   console.log(`- Asignados a Líder: ${asignadosLider}`);
   console.log(`- Asignados a Sede/Comisión: ${asignadosSede}`);
-  console.log(`- Sin Asignación: ${sinLugar}`);
+  console.log(`- Sin Asignación (vacíos): ${sinLugar}`);
+  console.log(`- Total a actualizar por DNI: ${itemsToUpdate.length}`);
 
-  // 3. Actualizar en lotes seguros SIN BORRAR NADA (actualizaciones por DNI)
-  console.log('3. Actualizando voluntarios_general en Supabase...');
-  const dniList = Array.from(updatesMap.keys());
-  let totalUpdatedFase1 = 0;
-  let totalUpdatedFase2 = 0;
+  // 3. Ejecutar actualizaciones en lotes SQL de alto rendimiento (SIN BORRAR NADA)
+  console.log('3. Ejecutando actualización en Supabase...');
+  const chunkSize = 500;
+  for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
+    const chunk = itemsToUpdate.slice(i, i + chunkSize);
+    const valuesSql = chunk.map(item => `(${escapeSql(item.dni)}, ${escapeSql(item.lider)}, ${escapeSql(item.lugar)})`).join(',\n');
 
-  // Procesar por lotes de 200
-  const batchSize = 200;
-  for (let i = 0; i < dniList.length; i += batchSize) {
-    const chunkDnis = dniList.slice(i, i + batchSize);
+    // Actualizar Fase 1
+    const sqlFase1 = `
+      UPDATE voluntarios_general AS vg
+      SET 
+        lider_nombre = COALESCE(v.lider, vg.lider_nombre),
+        lugar_asignado = COALESCE(v.lugar, vg.lugar_asignado)
+      FROM (VALUES
+        ${valuesSql}
+      ) AS v(dni, lider, lugar)
+      WHERE vg.dni = v.dni;
+    `;
+    const { error: err1 } = await supabase.rpc('exec_sql', { sql: sqlFase1 });
+    if (err1) throw new Error(`Error en lote SQL Fase 1: ${err1.message}`);
 
-    // Actualizar uno a uno o por casos (en Supabase, procesamos concurrentemente en chunks)
-    await Promise.all(chunkDnis.map(async (dni) => {
-      const info = updatesMap.get(dni);
-      if (info && (info.lider || info.lugar)) {
-        const payload = {};
-        if (info.lider) payload.lider_nombre = info.lider;
-        if (info.lugar) payload.lugar_asignado = info.lugar;
+    // Actualizar Fase 2
+    const sqlFase2 = `
+      UPDATE voluntarios AS v2
+      SET 
+        lider_nombre = COALESCE(v.lider, v2.lider_nombre),
+        lugar_asignado = COALESCE(v.lugar, v2.lugar_asignado)
+      FROM (VALUES
+        ${valuesSql}
+      ) AS v(dni, lider, lugar)
+      WHERE v2.dni = v.dni;
+    `;
+    const { error: err2 } = await supabase.rpc('exec_sql', { sql: sqlFase2 });
+    if (err2) throw new Error(`Error en lote SQL Fase 2: ${err2.message}`);
 
-        const { error: err1 } = await supabase
-          .from('voluntarios_general')
-          .update(payload)
-          .eq('dni', dni);
-
-        if (!err1) totalUpdatedFase1++;
-
-        const { error: err2 } = await supabase
-          .from('voluntarios')
-          .update(payload)
-          .eq('dni', dni);
-
-        if (!err2) totalUpdatedFase2++;
-      }
-    }));
-
-    if ((i + batchSize) % 1000 === 0 || i + batchSize >= dniList.length) {
-      console.log(`Progreso: ${Math.min(i + batchSize, dniList.length)} / ${dniList.length} DNIs procesados...`);
-    }
+    console.log(`Progreso: ${Math.min(i + chunkSize, itemsToUpdate.length)} / ${itemsToUpdate.length} asignaciones cruzadas...`);
   }
 
-  console.log('\n✅ SINCRONIZACIÓN DE ASIGNACIONES COMPLETADA:');
-  console.log(`- Total registros actualizados en Fase 1: ${totalUpdatedFase1}`);
-  console.log(`- Total registros actualizados en Fase 2: ${totalUpdatedFase2}`);
+  console.log('\n✅ SINCRONIZACIÓN DE ASIGNACIONES COMPLETADA EXITOSAMENTE');
 
   return {
     success: true,
@@ -151,8 +151,7 @@ async function syncAsignacionesVoluntarios() {
     asignadosLider,
     asignadosSede,
     sinAsignar: sinLugar,
-    totalUpdatedFase1,
-    totalUpdatedFase2
+    totalActualizados: itemsToUpdate.length
   };
 }
 
