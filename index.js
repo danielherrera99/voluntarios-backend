@@ -395,6 +395,18 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         status = 'PENDING';
       }
 
+      const lugarAsignado = f2Data.lugar_asignado || null;
+      let responsableNombre = null;
+      let tipoAsignacion = null;
+      if (lugarAsignado) {
+        if (/^Equipo\s+/i.test(lugarAsignado)) {
+          responsableNombre = lugarAsignado.replace(/^Equipo\s+/i, '').trim();
+          tipoAsignacion = 'EQUIPO_LIDER';
+        } else {
+          tipoAsignacion = 'SEDE_ESPECIAL';
+        }
+      }
+
       return res.json({
         found: true,
         fase: f2Data.fase || '2',
@@ -407,7 +419,10 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         comision: f2Data.servicio || 'Servicio General',
         area: f2Data.departamento || 'Diócesis de Chiclayo',
         observacion: f2Data.observacion || null,
-        info_validada: f2Data.info_validada
+        info_validada: f2Data.info_validada,
+        lugar_asignado: lugarAsignado,
+        responsable_asignado: responsableNombre,
+        tipo_asignacion: tipoAsignacion
       });
     }
 
@@ -421,6 +436,18 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
     if (f1Error) throw f1Error;
 
     if (f1Data) {
+      const lugarAsignadoF1 = f1Data.lugar_asignado || null;
+      let responsableNombreF1 = null;
+      let tipoAsignacionF1 = null;
+      if (lugarAsignadoF1) {
+        if (/^Equipo\s+/i.test(lugarAsignadoF1)) {
+          responsableNombreF1 = lugarAsignadoF1.replace(/^Equipo\s+/i, '').trim();
+          tipoAsignacionF1 = 'EQUIPO_LIDER';
+        } else {
+          tipoAsignacionF1 = 'SEDE_ESPECIAL';
+        }
+      }
+
       return res.json({
         found: true,
         fase: '1',
@@ -430,7 +457,10 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         codigo: f1Data.codigo,
         comision: f1Data.servicio,
         area: f1Data.departamento,
-        observacion: 'Registrado/a en el Padrón Inicial (Fase 1). Tu postulación a la Segunda Fase aún no ha sido registrada o está en proceso.'
+        observacion: 'Registrado/a en el Padrón Inicial (Fase 1). Tu postulación a la Segunda Fase aún no ha sido registrada o está en proceso.',
+        lugar_asignado: lugarAsignadoF1,
+        responsable_asignado: responsableNombreF1,
+        tipo_asignacion: tipoAsignacionF1
       });
     }
 
