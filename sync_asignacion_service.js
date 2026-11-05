@@ -116,6 +116,7 @@ async function syncAsignacionesVoluntarios() {
     const sqlFase1 = `
       UPDATE voluntarios_general AS vg
       SET 
+        responsable_nombre = COALESCE(v.lider, vg.responsable_nombre),
         lider_nombre = COALESCE(v.lider, vg.lider_nombre),
         lugar_asignado = COALESCE(v.lugar, vg.lugar_asignado)
       FROM (VALUES
@@ -130,6 +131,7 @@ async function syncAsignacionesVoluntarios() {
     const sqlFase2 = `
       UPDATE voluntarios AS v2
       SET 
+        responsable_nombre = COALESCE(v.lider, v2.responsable_nombre),
         lider_nombre = COALESCE(v.lider, v2.lider_nombre),
         lugar_asignado = COALESCE(v.lugar, v2.lugar_asignado)
       FROM (VALUES
