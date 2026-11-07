@@ -757,6 +757,67 @@ router.delete('/usuarios/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// Cambiar el rol de un usuario existente (Exclusivo Administrador)
+router.put('/usuarios/:id/rol', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { rol } = req.body;
+
+  const validRoles = ['admin', 'comision', 'validador', 'responsable', 'lider', 'guia'];
+  if (!rol || !validRoles.includes(rol)) {
+    return res.status(400).json({ msg: `Rol inválido. Debe ser uno de: ${validRoles.join(', ')}` });
+  }
+
+  try {
+    // Evitar que el administrador se quite a sí mismo el rol de admin por error
+    if (req.user && req.user.id === id && rol !== 'admin') {
+      return res.status(400).json({ msg: 'No puedes degradar tu propia cuenta de Administrador para evitar perder el acceso.' });
+    }
+
+    const { data: previousUser, error: findErr } = await supabase
+      .from('usuarios')
+      .select('id, nombre, correo, dni, rol')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (findErr || !previousUser) {
+      return res.status(404).json({ msg: 'Usuario no encontrado' });
+    }
+
+    const previousRol = previousUser.rol;
+
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({ rol })
+      .eq('id', id)
+      .select('id, dni, nombre, correo, estado, rol')
+      .single();
+
+    if (error) throw error;
+
+    await logAudit({
+      req,
+      accion: 'CAMBIO_DE_ROL',
+      detalles: {
+        usuario_id: id,
+        nombre: data.nombre,
+        dni: data.dni,
+        rol_anterior: previousRol,
+        nuevo_rol: rol,
+        modificado_por: req.user.nombre || req.user.correo
+      }
+    });
+
+    res.json({
+      success: true,
+      msg: `Rol de "${data.nombre}" actualizado con éxito de "${previousRol}" a "${rol}".`,
+      usuario: data
+    });
+  } catch (error) {
+    console.error('Error actualizando rol de usuario:', error.message);
+    res.status(500).json({ msg: 'Error al cambiar rol del usuario' });
+  }
+});
+
 // ==============================================================================
 // 4. RECUPERACIÓN Y CAMBIO DE CONTRASEÑA (ESTILO JUFRA POMALCA - OTP 6 DÍGITOS)
 // ==============================================================================
