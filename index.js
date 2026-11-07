@@ -88,6 +88,24 @@ const { logAudit } = require('./audit');
 // Rutas
 app.use('/api/auth', authRouter);
 
+// Proxy de imágenes para exportación de fotocheck en Canvas (CORS habilitado)
+app.get('/api/proxy-image', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send('URL requerida');
+  try {
+    const response = await fetch(url, { redirect: 'follow' });
+    if (!response.ok) return res.status(response.status).send('Error obteniendo imagen');
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).send('Error al procesar imagen');
+  }
+});
+
 // Endpoint para registrar eventos de auditoría desde el cliente autenticado
 app.post('/api/auditoria', requireAuth, async (req, res) => {
   try {
