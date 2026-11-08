@@ -1,7 +1,8 @@
 const https = require('https');
+const path = require('path');
 const XLSX = require('xlsx');
 const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -30,6 +31,14 @@ const LIDERES_MAP = {
   'ANYELO': 'ANYELO HERNAN CHISCUL ESQUIVES',
   'MAX': 'SANTOS MÁXIMO FIESTAS PATAZCA',
   'WILDER': 'WILDER ANIBAL LÓPEZ ALARCÓN'
+};
+
+// Mapeo por DNI del Responsable
+const LIDERES_DNI_MAP = {
+  '73050638': 'SEBASTIÁN LEÓN SALOMÉ',
+  '47584113': 'MARIA SOLEDAD LONGA GRANDA',
+  '47814182': 'WILDER ANIBAL LÓPEZ ALARCÓN',
+  '47844514': 'JHONATAN FRANCISCO FIESTAS PATAZCA',
 };
 
 const LUGARES_SEDES = [
@@ -66,7 +75,21 @@ async function syncAsignacionesVoluntarios() {
   if (!sheet) throw new Error('No se encontró la hoja "Voluntarios" en el archivo de Google Sheets');
 
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-  const dataRows = rows.slice(1).filter(r => r && r[5] && /^\d+$/.test(String(r[5]).trim()));
+  const headerRow = rows[0] || [];
+
+  // Detección dinámica de columnas según nombres oficiales
+  let colDniVol = headerRow.findIndex((h) => h && /dni/i.test(String(h)) && !/resp/i.test(String(h)));
+  if (colDniVol === -1) colDniVol = 6;
+
+  let colCruzLopez = headerRow.findIndex((h) => h && /cruz\s*l[oó]pe?z/i.test(String(h)));
+  if (colCruzLopez === -1) colCruzLopez = 2;
+
+  let colDniResp = headerRow.findIndex((h) => h && /dni\s*resp/i.test(String(h)));
+  if (colDniResp === -1) colDniResp = 3;
+
+  console.log(`Columnas mapeadas -> DNI Voluntario: [${colDniVol}] ${headerRow[colDniVol]} | Cruz López: [${colCruzLopez}] ${headerRow[colCruzLopez]} | DNI Responsable: [${colDniResp}] ${headerRow[colDniResp]}`);
+
+  const dataRows = rows.slice(1).filter(r => r && r[colDniVol] && /^\d+$/.test(String(r[colDniVol]).trim()));
 
   console.log(`2. Total registros válidos con DNI en el Excel: ${dataRows.length}`);
 
@@ -77,24 +100,37 @@ async function syncAsignacionesVoluntarios() {
   const itemsToUpdate = [];
 
   for (const r of dataRows) {
-    const dni = String(r[5]).trim();
-    const rawLugar = r[2] ? String(r[2]).trim().toUpperCase() : null;
+    const dni = String(r[colDniVol]).trim();
+    const rawCruz = r[colCruzLopez] ? String(r[colCruzLopez]).trim().toUpperCase() : null;
+    const rawDniResp = r[colDniResp] && /^\d+$/.test(String(r[colDniResp]).trim()) ? String(r[colDniResp]).trim() : null;
 
     let lider = null;
     let lugar = null;
 
-    if (rawLugar) {
-      if (LIDERES_MAP[rawLugar]) {
-        lider = LIDERES_MAP[rawLugar];
+    // 1. Prioridad: Resolver por DNI del Responsable si existe
+    if (rawDniResp && LIDERES_DNI_MAP[rawDniResp]) {
+      lider = LIDERES_DNI_MAP[rawDniResp];
+      lugar = `Equipo ${lider}`;
+    }
+
+    // 2. Resolver o complementar por Columna Cruz López
+    if (rawCruz) {
+      if (LIDERES_MAP[rawCruz]) {
+        lider = LIDERES_MAP[rawCruz];
         lugar = `Equipo ${lider}`;
-        asignadosLider++;
-      } else if (LUGARES_SEDES.includes(rawLugar)) {
-        lugar = rawLugar;
-        asignadosSede++;
-      } else {
-        lugar = rawLugar;
+      } else if (LUGARES_SEDES.includes(rawCruz)) {
+        lugar = rawCruz;
+      } else if (!lugar) {
+        lugar = rawCruz;
       }
+    }
+
+    if (lider) {
+      asignadosLider++;
       itemsToUpdate.push({ dni, lider, lugar });
+    } else if (lugar) {
+      asignadosSede++;
+      itemsToUpdate.push({ dni, lider: null, lugar });
     } else {
       sinLugar++;
     }
