@@ -55,7 +55,7 @@ cloudinary.config({
 
 // Servicio de Sincronización de Jerarquía y Mandos desde Google Sheets
 const { fetchAndParseGoogleSheets, compareHierarchy } = require('./sync_jerarquia_service');
-const { syncAsignacionesVoluntarios } = require('./sync_asignacion_service');
+const { syncAsignacionesVoluntarios, resolverContactoResponsable } = require('./sync_asignacion_service');
 
 // 3. Limitadores de Tasa (Rate Limiting)
 const generalLimiter = rateLimit({
@@ -414,14 +414,29 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
       }
 
       const lugarAsignado = f2Data.lugar_asignado || null;
-      let responsableNombre = null;
+      let responsableNombre = f2Data.responsable_nombre || null;
       let tipoAsignacion = null;
+      let responsableTelefono = null;
+      let responsableDni = null;
+
       if (lugarAsignado) {
         if (/^Equipo\s+/i.test(lugarAsignado)) {
-          responsableNombre = lugarAsignado.replace(/^Equipo\s+/i, '').trim();
+          if (!responsableNombre) {
+            responsableNombre = lugarAsignado.replace(/^Equipo\s+/i, '').trim();
+          }
           tipoAsignacion = 'EQUIPO_LIDER';
         } else {
           tipoAsignacion = 'SEDE_ESPECIAL';
+        }
+      }
+
+      if (responsableNombre || lugarAsignado) {
+        const contacto = resolverContactoResponsable(responsableNombre || lugarAsignado);
+        if (contacto) {
+          responsableNombre = contacto.nombre;
+          responsableTelefono = contacto.telefono;
+          responsableDni = contacto.dni;
+          if (!tipoAsignacion) tipoAsignacion = 'EQUIPO_LIDER';
         }
       }
 
@@ -440,6 +455,8 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         info_validada: f2Data.info_validada,
         lugar_asignado: lugarAsignado,
         responsable_asignado: responsableNombre,
+        responsable_telefono: responsableTelefono,
+        responsable_dni: responsableDni,
         tipo_asignacion: tipoAsignacion
       });
     }
@@ -455,14 +472,29 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
 
     if (f1Data) {
       const lugarAsignadoF1 = f1Data.lugar_asignado || null;
-      let responsableNombreF1 = null;
+      let responsableNombreF1 = f1Data.responsable_nombre || null;
       let tipoAsignacionF1 = null;
+      let responsableTelefonoF1 = null;
+      let responsableDniF1 = null;
+
       if (lugarAsignadoF1) {
         if (/^Equipo\s+/i.test(lugarAsignadoF1)) {
-          responsableNombreF1 = lugarAsignadoF1.replace(/^Equipo\s+/i, '').trim();
+          if (!responsableNombreF1) {
+            responsableNombreF1 = lugarAsignadoF1.replace(/^Equipo\s+/i, '').trim();
+          }
           tipoAsignacionF1 = 'EQUIPO_LIDER';
         } else {
           tipoAsignacionF1 = 'SEDE_ESPECIAL';
+        }
+      }
+
+      if (responsableNombreF1 || lugarAsignadoF1) {
+        const contactoF1 = resolverContactoResponsable(responsableNombreF1 || lugarAsignadoF1);
+        if (contactoF1) {
+          responsableNombreF1 = contactoF1.nombre;
+          responsableTelefonoF1 = contactoF1.telefono;
+          responsableDniF1 = contactoF1.dni;
+          if (!tipoAsignacionF1) tipoAsignacionF1 = 'EQUIPO_LIDER';
         }
       }
 
@@ -478,6 +510,8 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         observacion: 'Registrado/a en el Padrón Inicial (Fase 1). Tu postulación a la Segunda Fase aún no ha sido registrada o está en proceso.',
         lugar_asignado: lugarAsignadoF1,
         responsable_asignado: responsableNombreF1,
+        responsable_telefono: responsableTelefonoF1,
+        responsable_dni: responsableDniF1,
         tipo_asignacion: tipoAsignacionF1
       });
     }
