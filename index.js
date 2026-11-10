@@ -55,7 +55,7 @@ cloudinary.config({
 
 // Servicio de Sincronización de Jerarquía y Mandos desde Google Sheets
 const { fetchAndParseGoogleSheets, compareHierarchy } = require('./sync_jerarquia_service');
-const { syncAsignacionesVoluntarios, resolverContactoResponsable } = require('./sync_asignacion_service');
+const { syncAsignacionesVoluntarios, resolverContactoResponsable, getLiveMandosContactos } = require('./sync_asignacion_service');
 
 // 3. Limitadores de Tasa (Rate Limiting)
 const generalLimiter = rateLimit({
@@ -389,6 +389,9 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
       }
     }
 
+    // Cargar mapa dinámico de contactos de líderes y responsables desde estructura_mandos
+    const liveMandos = await getLiveMandosContactos();
+
     // 1. Buscar en Fase 2 (voluntarios)
     const { data: f2Data, error: f2Error } = await supabase
       .from('voluntarios')
@@ -431,7 +434,7 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
       }
 
       if (responsableNombre || lugarAsignado) {
-        const contacto = resolverContactoResponsable(responsableNombre || lugarAsignado);
+        const contacto = resolverContactoResponsable(responsableNombre || lugarAsignado, null, liveMandos);
         if (contacto) {
           responsableNombre = contacto.nombre;
           responsableTelefono = contacto.telefono;
@@ -489,7 +492,7 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
       }
 
       if (responsableNombreF1 || lugarAsignadoF1) {
-        const contactoF1 = resolverContactoResponsable(responsableNombreF1 || lugarAsignadoF1);
+        const contactoF1 = resolverContactoResponsable(responsableNombreF1 || lugarAsignadoF1, null, liveMandos);
         if (contactoF1) {
           responsableNombreF1 = contactoF1.nombre;
           responsableTelefonoF1 = contactoF1.telefono;

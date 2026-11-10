@@ -110,20 +110,86 @@ const LIDER_ALIASES = {
   'LUIS CHUMAN': 'LUIS MIGUEL CHUMAN MONTERO'
 };
 
-function resolverContactoResponsable(rawName, rawDni) {
+let mandosCache = null;
+let mandosCacheExpiry = 0;
+
+async function getLiveMandosContactos() {
+  const now = Date.now();
+  if (mandosCache && now < mandosCacheExpiry) {
+    return mandosCache;
+  }
+  try {
+    const { data, error } = await supabase
+      .from('estructura_mandos')
+      .select('responsable_nombre, responsable_dni, responsable_telefono')
+      .not('responsable_nombre', 'is', null);
+
+    if (error) {
+      console.error('Error cargando estructura_mandos para contactos:', error.message);
+      return mandosCache || LIDERES_CONTACTOS;
+    }
+
+    const map = {};
+    (data || []).forEach(row => {
+      if (row.responsable_nombre) {
+        const norm = row.responsable_nombre.trim().toUpperCase();
+        if (!map[norm] || (!map[norm].telefono && row.responsable_telefono)) {
+          map[norm] = {
+            nombre: row.responsable_nombre,
+            dni: row.responsable_dni,
+            telefono: row.responsable_telefono
+          };
+        }
+      }
+    });
+
+    mandosCache = map;
+    mandosCacheExpiry = now + 30000; // Cache 30 segundos
+    return mandosCache;
+  } catch (err) {
+    console.error('Error en getLiveMandosContactos:', err.message);
+    return mandosCache || LIDERES_CONTACTOS;
+  }
+}
+
+function resolverContactoResponsable(rawName, rawDni, liveMap = null) {
+  let canonical = null;
   if (rawDni && LIDERES_DNI_MAP[rawDni]) {
-    const canonical = LIDERES_DNI_MAP[rawDni];
-    if (LIDERES_CONTACTOS[canonical]) return LIDERES_CONTACTOS[canonical];
+    canonical = LIDERES_DNI_MAP[rawDni];
+  } else if (rawName) {
+    const clean = String(rawName).replace(/^Equipo\s+/i, '').trim().toUpperCase();
+    if (LIDERES_CONTACTOS[clean]) {
+      canonical = clean;
+    } else if (LIDER_ALIASES[clean]) {
+      canonical = LIDER_ALIASES[clean];
+    } else if (LIDERES_MAP[clean]) {
+      canonical = LIDERES_MAP[clean];
+    } else {
+      canonical = clean;
+    }
   }
-  if (!rawName) return null;
-  const clean = String(rawName).replace(/^Equipo\s+/i, '').trim().toUpperCase();
-  if (LIDERES_CONTACTOS[clean]) return LIDERES_CONTACTOS[clean];
-  if (LIDER_ALIASES[clean] && LIDERES_CONTACTOS[LIDER_ALIASES[clean]]) {
-    return LIDERES_CONTACTOS[LIDER_ALIASES[clean]];
+
+  if (!canonical) return null;
+
+  // 1. Prioridad: Buscar en la base de datos viva (estructura_mandos)
+  if (liveMap && liveMap[canonical] && liveMap[canonical].telefono) {
+    return liveMap[canonical];
   }
-  if (LIDERES_MAP[clean] && LIDERES_CONTACTOS[LIDERES_MAP[clean]]) {
-    return LIDERES_CONTACTOS[LIDERES_MAP[clean]];
+
+  // 2. Si liveMap no tiene coincidencia exacta, buscar por similitud
+  if (liveMap) {
+    const keys = Object.keys(liveMap);
+    const foundKey = keys.find(k => k === canonical || k.includes(canonical) || canonical.includes(k));
+    if (foundKey && liveMap[foundKey]?.telefono) {
+      return liveMap[foundKey];
+    }
   }
+
+  // 3. Fallback a directorio base
+  if (LIDERES_CONTACTOS[canonical]) {
+    return LIDERES_CONTACTOS[canonical];
+  }
+
   return null;
 }
 
@@ -282,6 +348,7 @@ async function syncAsignacionesVoluntarios() {
 module.exports = {
   syncAsignacionesVoluntarios,
   resolverContactoResponsable,
+  getLiveMandosContactos,
   LIDERES_CONTACTOS,
   LIDERES_MAP,
   LIDERES_DNI_MAP
