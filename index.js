@@ -458,8 +458,9 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         info_validada: f2Data.info_validada,
         lugar_asignado: lugarAsignado,
         responsable_asignado: responsableNombre,
-        responsable_telefono: responsableTelefono,
-        responsable_dni: responsableDni,
+        lider_nombre: f2Data.lider_nombre || null,
+        guia_nombre: f2Data.guia_nombre || null,
+        cuadrilla_codigo: f2Data.cuadrilla_codigo || null,
         tipo_asignacion: tipoAsignacion
       });
     }
@@ -477,8 +478,6 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
       const lugarAsignadoF1 = f1Data.lugar_asignado || null;
       let responsableNombreF1 = f1Data.responsable_nombre || null;
       let tipoAsignacionF1 = null;
-      let responsableTelefonoF1 = null;
-      let responsableDniF1 = null;
 
       if (lugarAsignadoF1) {
         if (/^Equipo\s+/i.test(lugarAsignadoF1)) {
@@ -495,8 +494,6 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         const contactoF1 = resolverContactoResponsable(responsableNombreF1 || lugarAsignadoF1, null, liveMandos);
         if (contactoF1) {
           responsableNombreF1 = contactoF1.nombre;
-          responsableTelefonoF1 = contactoF1.telefono;
-          responsableDniF1 = contactoF1.dni;
           if (!tipoAsignacionF1) tipoAsignacionF1 = 'EQUIPO_LIDER';
         }
       }
@@ -513,8 +510,9 @@ app.get('/api/consulta/:dni', consultaLimiter, async (req, res) => {
         observacion: 'Registrado/a en el Padrón Inicial (Fase 1). Tu postulación a la Segunda Fase aún no ha sido registrada o está en proceso.',
         lugar_asignado: lugarAsignadoF1,
         responsable_asignado: responsableNombreF1,
-        responsable_telefono: responsableTelefonoF1,
-        responsable_dni: responsableDniF1,
+        lider_nombre: f1Data.lider_nombre || null,
+        guia_nombre: f1Data.guia_nombre || null,
+        cuadrilla_codigo: f1Data.cuadrilla_codigo || null,
         tipo_asignacion: tipoAsignacionF1
       });
     }
