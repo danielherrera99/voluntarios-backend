@@ -150,6 +150,52 @@ app.get('/', (req, res) => {
   res.send('API Voluntarios Funcionando');
 });
 
+// Caché en memoria para configuraciones públicas (Popup y Banners) para reducir drásticamente llamadas y logs en Supabase
+let publicPortalConfigCache = {
+  data: null,
+  timestamp: 0
+};
+const PUBLIC_CONFIG_TTL_MS = 5 * 60 * 1000; // 5 minutos de caché en memoria
+
+app.get('/api/portal/config', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    const now = Date.now();
+
+    if (!forceRefresh && publicPortalConfigCache.data && (now - publicPortalConfigCache.timestamp < PUBLIC_CONFIG_TTL_MS)) {
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600');
+      return res.json(publicPortalConfigCache.data);
+    }
+
+    const [popupRes, bannerRes] = await Promise.allSettled([
+      supabase.from('portal_popup').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('configuracion_banners').select('*').eq('id', 'capacitaciones').maybeSingle()
+    ]);
+
+    const popupData = popupRes.status === 'fulfilled' && !popupRes.value.error ? popupRes.value.data : null;
+    const bannerData = bannerRes.status === 'fulfilled' && !bannerRes.value.error ? bannerRes.value.data : null;
+
+    const payload = {
+      popup: popupData,
+      banner: bannerData
+    };
+
+    publicPortalConfigCache = {
+      data: payload,
+      timestamp: now
+    };
+
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600');
+    return res.json(payload);
+  } catch (err) {
+    console.error('Error en /api/portal/config:', err.message);
+    if (publicPortalConfigCache.data) {
+      return res.json(publicPortalConfigCache.data);
+    }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Obtener todos los voluntarios (Protegido por token)
 app.get('/api/voluntarios', requireAuth, async (req, res) => {
   try {
