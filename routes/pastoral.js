@@ -93,7 +93,7 @@ router.get('/api/public/overview', (_req, res) => {
     title: 'Pastoral Juvenil P. San José Obrero',
     subtitle: '3 Años de servicio y entrega pastoral',
     dateLabel: '5 de noviembre',
-    parishOrRole: 'Decanato Chiclayo Sur',
+    parishOrRole: 'Zona Chiclayo Sur',
   });
 
   const payload = {
@@ -114,7 +114,7 @@ router.get('/api/public/overview', (_req, res) => {
 router.post('/api/public/leads', (req, res) => {
   const fullName = cleanStr(req.body?.fullName, 120);
   const parish = cleanStr(req.body?.parish, 120);
-  const decanato = cleanStr(req.body?.decanato, 120) || 'Por asignar';
+  const decanato = cleanStr(req.body?.zona || req.body?.decanato, 120) || 'Zona Chiclayo Centro';
   const phone = cleanStr(req.body?.phone, 40);
   const email = cleanStr(req.body?.email, 120);
   const pastoralId = cleanStr(req.body?.pastoralId, 60);
@@ -178,7 +178,7 @@ router.post('/api/pastoral/auth/register', async (req, res) => {
     const pastoralNombre = cleanStr(req.body?.pastoralNombre, 150) || 'Coordinación General / Por Definir';
     const telefono = cleanStr(req.body?.telefono, 30);
     const parroquia = cleanStr(req.body?.parroquia, 150) || 'Por asignar';
-    const decanato = cleanStr(req.body?.decanato, 150) || 'Decanato Chiclayo Centro';
+    const zona = cleanStr(req.body?.zona || req.body?.decanato, 150) || 'Zona Chiclayo Centro';
     const rol = cleanStr(req.body?.rol, 50) || 'miembro';
 
     if (!usuario || usuario.length < 3) {
@@ -222,7 +222,8 @@ router.post('/api/pastoral/auth/register', async (req, res) => {
         rol,
         telefono,
         parroquia,
-        decanato,
+        decanato: zona,
+        zona,
         estado: 'activo'
       })
       .select()
@@ -630,7 +631,7 @@ router.delete('/api/erp/pastorals/:id', requireAuth, requireRoles('admin_diocesa
 router.post('/api/crm/prospects', requireAuth, (req, res) => {
   const fullName = cleanStr(req.body?.fullName, 120);
   const parish = cleanStr(req.body?.parish, 120);
-  const decanato = cleanStr(req.body?.decanato, 120) || 'Decanato Chiclayo Centro';
+  const decanato = cleanStr(req.body?.zona || req.body?.decanato, 120) || 'Zona Chiclayo Centro';
   const phone = cleanStr(req.body?.phone, 40);
   const email = cleanStr(req.body?.email, 120);
   const forcedPastoral = resolveScopedPastoralId(req, req.body?.pastoralId);
@@ -762,7 +763,7 @@ router.post('/api/erp/members', requireAuth, (req, res) => {
   const forcedPastoral = resolveScopedPastoralId(req, req.body?.pastoralId);
   const pastoralId = forcedPastoral || cleanStr(req.body?.pastoralId, 60) || 'pas-juvenil';
   const parish = cleanStr(req.body?.parish, 120);
-  const decanato = cleanStr(req.body?.decanato, 120) || 'Decanato Chiclayo Centro';
+  const decanato = cleanStr(req.body?.zona || req.body?.decanato, 120) || 'Zona Chiclayo Centro';
   const phone = cleanStr(req.body?.phone, 40);
   const email = cleanStr(req.body?.email, 120);
   const birthDate = cleanStr(req.body?.birthDate, 20) || '2001-01-01';
@@ -808,7 +809,7 @@ router.patch('/api/erp/members/:id', requireAuth, (req, res) => {
     if (req.body?.fullName) target.fullName = cleanStr(req.body.fullName, 120);
     if (req.body?.roleTitle) target.roleTitle = cleanStr(req.body.roleTitle, 80);
     if (req.body?.parish) target.parish = cleanStr(req.body.parish, 120);
-    if (req.body?.decanato) target.decanato = cleanStr(req.body.decanato, 120);
+    if (req.body?.decanato || req.body?.zona) target.decanato = cleanStr(req.body.zona || req.body.decanato, 120);
     if (req.body?.phone) target.phone = cleanStr(req.body.phone, 40);
     if (req.body?.email) target.email = cleanStr(req.body.email, 120);
     if (req.body?.birthDate) target.birthDate = cleanStr(req.body.birthDate, 20);
