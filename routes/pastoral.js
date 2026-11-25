@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
+const { createClient } = require('@supabase/supabase-js');
 const { getDb, saveDb, makeId, findUserByEmail } = require('../pastoral/db');
 const {
   hashPassword,
@@ -8,6 +10,8 @@ const {
   requireAuth,
   requireRoles,
 } = require('../pastoral/auth');
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const VALID_PASTORAL_STATUSES = ['Activa', 'En Formación', 'Pausa'];
 const VALID_PROSPECT_STAGES = [
@@ -160,14 +164,252 @@ router.post('/api/public/leads', (req, res) => {
 });
 
 // ==========================================
-// 2. AUTH & BOOTSTRAP ENDPOINTS
+// 2. AUTH & BOOTSTRAP ENDPOINTS (usuarios_pj)
 // ==========================================
+
+// 1. Registro en nueva tabla usuarios_pj
+router.post('/api/pastoral/auth/register', async (req, res) => {
+  try {
+    const usuario = cleanStr(req.body?.usuario, 60).toLowerCase();
+    const nombreCompleto = cleanStr(req.body?.nombreCompleto || req.body?.name, 120);
+    const correo = cleanStr(req.body?.correo || req.body?.email, 120).toLowerCase();
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const pastoralId = cleanStr(req.body?.pastoralId, 80) || 'general';
+    const pastoralNombre = cleanStr(req.body?.pastoralNombre, 150) || 'Coordinación General / Por Definir';
+    const telefono = cleanStr(req.body?.telefono, 30);
+    const parroquia = cleanStr(req.body?.parroquia, 150) || 'Por asignar';
+    const decanato = cleanStr(req.body?.decanato, 150) || 'Decanato Chiclayo Centro';
+    const rol = cleanStr(req.body?.rol, 50) || 'miembro';
+
+    if (!usuario || usuario.length < 3) {
+      return res.status(400).json({ error: 'El nombre de usuario debe tener al menos 3 caracteres.' });
+    }
+    if (!nombreCompleto || nombreCompleto.length < 3) {
+      return res.status(400).json({ error: 'Ingresa tu nombre completo.' });
+    }
+    if (!isValidEmail(correo)) {
+      return res.status(400).json({ error: 'Ingresa un correo electrónico válido.' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+    }
+
+    // Verificar si ya existe usuario o correo en usuarios_pj
+    const { data: existingUsers } = await supabase
+      .from('usuarios_pj')
+      .select('id, usuario, correo')
+      .or(`correo.eq.${correo},usuario.eq.${usuario}`);
+
+    if (existingUsers && existingUsers.length > 0) {
+      const match = existingUsers[0];
+      if (match.correo.toLowerCase() === correo) {
+        return res.status(409).json({ error: 'Ya existe una cuenta registrada con este correo electrónico.' });
+      }
+      return res.status(409).json({ error: 'El nombre de usuario ya está en uso. Por favor elige otro.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const { data: newUser, error: insertError } = await supabase
+      .from('usuarios_pj')
+      .insert({
+        usuario,
+        nombre_completo: nombreCompleto,
+        correo,
+        password_hash: passwordHash,
+        pastoral_id: pastoralId,
+        pastoral_nombre: pastoralNombre,
+        rol,
+        telefono,
+        parroquia,
+        decanato,
+        estado: 'activo'
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('Error insertando en usuarios_pj:', insertError);
+      return res.status(500).json({ error: 'Error al registrar usuario en la base de datos diocesana.' });
+    }
+
+    const token = signToken(newUser.id, newUser.rol);
+
+    res.status(201).json({
+      success: true,
+      message: '¡Cuenta creada con bendición en la Pastoral Juvenil de Chiclayo!',
+      token,
+      user: {
+        id: newUser.id,
+        usuario: newUser.usuario,
+        name: newUser.nombre_completo,
+        email: newUser.correo,
+        role: newUser.rol,
+        pastoralId: newUser.pastoral_id,
+        pastoralNombre: newUser.pastoral_nombre,
+        parroquia: newUser.parroquia,
+        telefono: newUser.telefono,
+        createdAt: newUser.created_at,
+      }
+    });
+  } catch (err) {
+    console.error('Error en register:', err);
+    res.status(500).json({ error: 'Error interno del servidor al procesar el registro.' });
+  }
+});
+
+// 2. Iniciar sesión desde usuarios_pj
+router.post('/api/pastoral/auth/login', async (req, res) => {
+  try {
+    const loginInput = cleanStr(req.body?.login || req.body?.email || req.body?.usuario, 120).toLowerCase();
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (!loginInput || !password) {
+      return res.status(400).json({ error: 'Ingresa tu usuario/correo y contraseña.' });
+    }
+
+    const { data: users, error: searchError } = await supabase
+      .from('usuarios_pj')
+      .select('*')
+      .or(`correo.eq.${loginInput},usuario.eq.${loginInput}`)
+      .limit(1);
+
+    if (searchError || !users || users.length === 0) {
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos en el sistema pastoral.' });
+    }
+
+    const user = users[0];
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+    }
+
+    const token = signToken(user.id, user.rol);
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        usuario: user.usuario,
+        name: user.nombre_completo,
+        email: user.correo,
+        role: user.rol,
+        pastoralId: user.pastoral_id,
+        pastoralNombre: user.pastoral_nombre,
+        parroquia: user.parroquia,
+        telefono: user.telefono,
+        createdAt: user.created_at,
+      }
+    });
+  } catch (err) {
+    console.error('Error en login:', err);
+    res.status(500).json({ error: 'Error al iniciar sesión en el servidor.' });
+  }
+});
+
+// 3. Solicitar código de recuperación de contraseña
+router.post('/api/pastoral/auth/forgot-password', async (req, res) => {
+  try {
+    const loginInput = cleanStr(req.body?.login || req.body?.email || req.body?.correo, 120).toLowerCase();
+    if (!loginInput) {
+      return res.status(400).json({ error: 'Ingresa tu correo electrónico o nombre de usuario.' });
+    }
+
+    const { data: users, error } = await supabase
+      .from('usuarios_pj')
+      .select('id, correo, usuario, nombre_completo')
+      .or(`correo.eq.${loginInput},usuario.eq.${loginInput}`)
+      .limit(1);
+
+    if (error || !users || users.length === 0) {
+      return res.status(404).json({ error: 'No se encontró ninguna cuenta asociada a este correo o usuario.' });
+    }
+
+    const user = users[0];
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hora
+
+    await supabase
+      .from('usuarios_pj')
+      .update({
+        reset_token: code,
+        reset_token_expires: expires,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', user.id);
+
+    const emailMasked = user.correo.replace(/^(.{2})(.*)(@.*)$/, (_, a, b, c) => a + '*'.repeat(Math.max(1, b.length)) + c);
+
+    res.json({
+      success: true,
+      message: `Código de recuperación generado para ${emailMasked}.`,
+      code, // Para verificación inmediata en la interfaz
+      emailMasked
+    });
+  } catch (err) {
+    console.error('Error en forgot-password:', err);
+    res.status(500).json({ error: 'Error al procesar la solicitud de recuperación.' });
+  }
+});
+
+// 4. Restablecer contraseña con código
+router.post('/api/pastoral/auth/reset-password', async (req, res) => {
+  try {
+    const loginInput = cleanStr(req.body?.login || req.body?.email || req.body?.correo, 120).toLowerCase();
+    const code = cleanStr(req.body?.code, 20);
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+
+    if (!loginInput || !code || !newPassword) {
+      return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+    }
+
+    const { data: users, error } = await supabase
+      .from('usuarios_pj')
+      .select('id, reset_token, reset_token_expires')
+      .or(`correo.eq.${loginInput},usuario.eq.${loginInput}`)
+      .limit(1);
+
+    if (error || !users || users.length === 0) {
+      return res.status(404).json({ error: 'Cuenta no encontrada.' });
+    }
+
+    const user = users[0];
+    if (!user.reset_token || user.reset_token !== code) {
+      return res.status(400).json({ error: 'El código de verificación ingresado es incorrecto.' });
+    }
+    if (new Date() > new Date(user.reset_token_expires)) {
+      return res.status(400).json({ error: 'El código de verificación ha expirado. Solicita uno nuevo.' });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await supabase
+      .from('usuarios_pj')
+      .update({
+        password_hash: newHash,
+        reset_token: null,
+        reset_token_expires: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', user.id);
+
+    res.json({
+      success: true,
+      message: '¡Contraseña restablecida exitosamente! Ya puedes iniciar sesión con tu nueva contraseña.'
+    });
+  } catch (err) {
+    console.error('Error en reset-password:', err);
+    res.status(500).json({ error: 'Error al restablecer contraseña.' });
+  }
+});
 
 router.get('/api/auth/status', (_req, res) => {
   const db = getDb();
   res.json({
-    needsSetup: db.users.length === 0,
-    hasUsers: db.users.length > 0,
+    needsSetup: false,
+    hasUsers: true,
   });
 });
 
