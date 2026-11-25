@@ -88,6 +88,11 @@ const { logAudit } = require('./audit');
 // Rutas
 app.use('/api/auth', authRouter);
 
+// Rutas de Pastoral Juvenil Diocesana (AI Studio / Diócesis de Chiclayo)
+const pastoralRouter = require('./routes/pastoral');
+app.use(pastoralRouter);
+
+
 // Proxy de imágenes para exportación de fotocheck en Canvas (CORS habilitado)
 app.get('/api/proxy-image', async (req, res) => {
   const { url } = req.query;
