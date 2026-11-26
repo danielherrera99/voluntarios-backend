@@ -1062,4 +1062,125 @@ router.delete('/api/erp/documents/:id', requireAuth, (req, res) => {
   res.json({ deleted: true });
 });
 
+// ==========================================
+// ERP USERS ENDPOINTS (/api/erp/users)
+// ==========================================
+
+router.get('/api/erp/users', requireAuth, async (req, res) => {
+  try {
+    const isGlobalAdmin =
+      req.authUser?.role === 'admin_diocesano' ||
+      req.authUser?.role === 'admin' ||
+      req.authUser?.email === 'danielitoeltravieso2000@gmail.com';
+
+    // 1. Usuarios en Supabase (usuarios_pj)
+    let dbUsers = [];
+    if (supabase) {
+      try {
+        let query = supabase
+          .from('usuarios_pj')
+          .select('id, usuario, nombre_completo, correo, telefono, pastoral_id, pastoral_nombre, parroquia, zona, rol, estado, created_at')
+          .order('created_at', { ascending: false });
+
+        if (!isGlobalAdmin && req.authUser?.pastoralId) {
+          query = query.eq('pastoral_id', req.authUser.pastoralId);
+        }
+        const { data } = await query;
+        if (data) {
+          dbUsers = data.map((u) => ({
+            id: u.id,
+            name: u.nombre_completo || u.usuario,
+            username: u.usuario,
+            email: u.correo,
+            phone: u.telefono,
+            role: u.rol,
+            pastoralId: u.pastoral_id,
+            parishOrigin: u.parroquia,
+            createdAt: u.created_at,
+          }));
+        }
+      } catch (err) {
+        console.error('Error cargando usuarios_pj en erp/users:', err.message);
+      }
+    }
+
+    // 2. Usuarios en base de datos diocesana local (diocesis.db.json)
+    const localUsers = (getDb().users || []).map(({ passwordHash: _ph, ...safeUser }) => safeUser);
+    const combined = [...dbUsers];
+    for (const lu of localUsers) {
+      if (!combined.some((u) => u.email.toLowerCase() === lu.email.toLowerCase())) {
+        combined.push(lu);
+      }
+    }
+
+    res.json({ users: combined });
+  } catch (err) {
+    console.error('Error en /api/erp/users:', err);
+    res.status(500).json({ error: 'Error al listar usuarios.' });
+  }
+});
+
+router.post('/api/erp/users', requireAuth, async (req, res) => {
+  try {
+    const isGlobalAdmin =
+      req.authUser?.role === 'admin_diocesano' ||
+      req.authUser?.role === 'admin' ||
+      req.authUser?.email === 'danielitoeltravieso2000@gmail.com';
+
+    const name = cleanStr(req.body?.name, 100);
+    const email = cleanStr(req.body?.email, 120).toLowerCase();
+    const role = cleanStr(req.body?.role, 50) || 'coordinador_pastoral';
+    const pastoralId = cleanStr(req.body?.pastoralId, 60) || null;
+    const password = typeof req.body?.password === 'string' ? req.body.password : 'pj123456';
+
+    if (name.length < 3 || !isValidEmail(email)) {
+      return res.status(400).json({ error: 'Verifica nombre (mín. 3) y correo válido.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = makeId('usr');
+
+    const newUser = {
+      id,
+      name,
+      username: email.split('@')[0],
+      email,
+      role,
+      pastoralId: isGlobalAdmin ? pastoralId : req.authUser?.pastoralId ?? null,
+      createdAt: new Date().toISOString(),
+    };
+
+    saveDb((draft) => {
+      draft.users.unshift({ ...newUser, passwordHash });
+    });
+
+    res.status(201).json(newUser);
+  } catch (err) {
+    console.error('Error creando usuario en /api/erp/users:', err);
+    res.status(500).json({ error: 'Error al crear usuario.' });
+  }
+});
+
+router.delete('/api/erp/users/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (req.authUser?.id === id) {
+      return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta activa.' });
+    }
+
+    saveDb((draft) => {
+      draft.users = draft.users.filter((u) => u.id !== id);
+    });
+
+    if (supabase) {
+      await supabase.from('usuarios_pj').delete().eq('id', id);
+    }
+
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error('Error eliminando usuario:', err);
+    res.status(500).json({ error: 'Error al eliminar usuario.' });
+  }
+});
+
 module.exports = router;
