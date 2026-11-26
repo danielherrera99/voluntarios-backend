@@ -10,6 +10,8 @@ const {
   requireAuth,
   requireRoles,
 } = require('../pastoral/auth');
+const authRouter = require('./auth');
+const sendRecoveryEmail = authRouter.sendRecoveryEmail;
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -219,12 +221,12 @@ router.post('/api/pastoral/auth/register', async (req, res) => {
         password_hash: passwordHash,
         pastoral_id: pastoralId,
         pastoral_nombre: pastoralNombre,
-        rol,
+        rol: 'miembro',
         telefono,
         parroquia,
         decanato: zona,
         zona,
-        estado: 'activo'
+        estado: 'pendiente'
       })
       .select()
       .single();
@@ -234,12 +236,10 @@ router.post('/api/pastoral/auth/register', async (req, res) => {
       return res.status(500).json({ error: 'Error al registrar usuario en la base de datos diocesana.' });
     }
 
-    const token = signToken(newUser.id, newUser.rol);
-
     res.status(201).json({
       success: true,
-      message: '¡Cuenta creada con bendición en la Pastoral Juvenil de Chiclayo!',
-      token,
+      pending: true,
+      message: '¡Solicitud registrada con éxito! Tu cuenta está en revisión y será aprobada por el Administrador Diocesano o el Coordinador de tu comunidad.',
       user: {
         id: newUser.id,
         usuario: newUser.usuario,
@@ -249,7 +249,8 @@ router.post('/api/pastoral/auth/register', async (req, res) => {
         pastoralId: newUser.pastoral_id,
         pastoralNombre: newUser.pastoral_nombre,
         parroquia: newUser.parroquia,
-        telefono: newUser.telefono,
+        zona: newUser.zona,
+        estado: 'pendiente',
         createdAt: newUser.created_at,
       }
     });
@@ -285,6 +286,24 @@ router.post('/api/pastoral/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
     }
 
+    if (user.estado === 'pendiente') {
+      return res.status(403).json({
+        error: 'Tu solicitud de acceso está en revisión. El Administrador Diocesano o tu Coordinador la aprobará pronto.'
+      });
+    }
+
+    if (user.estado === 'rechazado') {
+      return res.status(403).json({
+        error: 'Tu solicitud de acceso no fue aprobada. Por favor comunícate con la coordinación diocesana.'
+      });
+    }
+
+    if (user.estado === 'inactivo') {
+      return res.status(403).json({
+        error: 'Tu cuenta se encuentra inactiva. Comunícate con la coordinación diocesana.'
+      });
+    }
+
     const token = signToken(user.id, user.rol);
     res.json({
       success: true,
@@ -298,6 +317,8 @@ router.post('/api/pastoral/auth/login', async (req, res) => {
         pastoralId: user.pastoral_id,
         pastoralNombre: user.pastoral_nombre,
         parroquia: user.parroquia,
+        zona: user.zona,
+        estado: user.estado,
         telefono: user.telefono,
         createdAt: user.created_at,
       }
@@ -328,7 +349,7 @@ router.post('/api/pastoral/auth/forgot-password', async (req, res) => {
 
     const user = users[0];
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hora
+    const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutos
 
     await supabase
       .from('usuarios_pj')
@@ -339,13 +360,28 @@ router.post('/api/pastoral/auth/forgot-password', async (req, res) => {
       })
       .eq('id', user.id);
 
+    // Enviar código real por correo electrónico (Brevo / Nodemailer)
+    let emailResult = { sent: false };
+    if (typeof sendRecoveryEmail === 'function') {
+      try {
+        emailResult = await sendRecoveryEmail({
+          toEmail: user.correo,
+          toName: user.nombre_completo || user.usuario || 'Hermano(a)',
+          code
+        });
+      } catch (e) {
+        console.error('Error enviando correo de recuperación en usuarios_pj:', e.message);
+      }
+    }
+
     const emailMasked = user.correo.replace(/^(.{2})(.*)(@.*)$/, (_, a, b, c) => a + '*'.repeat(Math.max(1, b.length)) + c);
 
     res.json({
       success: true,
-      message: `Código de recuperación generado para ${emailMasked}.`,
-      code, // Para verificación inmediata en la interfaz
-      emailMasked
+      message: `Código de recuperación enviado a ${emailMasked}. Revisa tu bandeja de entrada o spam.`,
+      emailMasked,
+      emailSent: emailResult.sent,
+      ...(emailResult.isDev ? { code } : {}) // Solo muestra el código en pantalla si no hay credenciales SMTP configuradas
     });
   } catch (err) {
     console.error('Error en forgot-password:', err);
@@ -403,6 +439,134 @@ router.post('/api/pastoral/auth/reset-password', async (req, res) => {
   } catch (err) {
     console.error('Error en reset-password:', err);
     res.status(500).json({ error: 'Error al restablecer contraseña.' });
+  }
+});
+
+// 5. GESTIÓN DE SOLICITUDES Y USUARIOS (ADMINISTRADOR DIOCESANO Y COORDINADORES)
+router.get('/api/pastoral/usuarios/solicitudes', requireAuth, async (req, res) => {
+  try {
+    const isGlobalAdmin = req.authUser.role === 'admin_diocesano';
+    let query = supabase
+      .from('usuarios_pj')
+      .select('id, usuario, nombre_completo, correo, telefono, pastoral_id, pastoral_nombre, parroquia, zona, rol, estado, created_at')
+      .eq('estado', 'pendiente')
+      .order('created_at', { ascending: false });
+
+    if (!isGlobalAdmin) {
+      if (!req.authUser.pastoralId) {
+        return res.status(403).json({ error: 'No tienes una comunidad asignada para gestionar solicitudes.' });
+      }
+      query = query.eq('pastoral_id', req.authUser.pastoralId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, solicitudes: data || [] });
+  } catch (err) {
+    console.error('Error listando solicitudes:', err);
+    res.status(500).json({ error: 'Error al obtener solicitudes de acceso.' });
+  }
+});
+
+router.put('/api/pastoral/usuarios/:id/aprobar', requireAuth, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const isGlobalAdmin = req.authUser.role === 'admin_diocesano';
+    const assignedRole = cleanStr(req.body?.rol, 50) || 'miembro';
+
+    // Verificar si el usuario que aprueba tiene permiso
+    const { data: targetUser, error: findError } = await supabase
+      .from('usuarios_pj')
+      .select('id, pastoral_id, correo, nombre_completo')
+      .eq('id', userId)
+      .single();
+
+    if (findError || !targetUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+
+    if (!isGlobalAdmin && targetUser.pastoral_id !== req.authUser.pastoralId) {
+      return res.status(403).json({ error: 'Solo puedes aprobar miembros de tu propia pastoral o movimiento.' });
+    }
+
+    const { error: updateError } = await supabase
+      .from('usuarios_pj')
+      .update({
+        estado: 'activo',
+        rol: assignedRole,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userId);
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      message: `Usuario aprobado exitosamente con rol '${assignedRole}'.`
+    });
+  } catch (err) {
+    console.error('Error aprobando usuario:', err);
+    res.status(500).json({ error: 'Error al aprobar usuario.' });
+  }
+});
+
+router.put('/api/pastoral/usuarios/:id/rechazar', requireAuth, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const isGlobalAdmin = req.authUser.role === 'admin_diocesano';
+
+    const { data: targetUser, error: findError } = await supabase
+      .from('usuarios_pj')
+      .select('id, pastoral_id')
+      .eq('id', userId)
+      .single();
+
+    if (findError || !targetUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+
+    if (!isGlobalAdmin && targetUser.pastoral_id !== req.authUser.pastoralId) {
+      return res.status(403).json({ error: 'Solo puedes gestionar solicitudes de tu propia pastoral o movimiento.' });
+    }
+
+    const { error: updateError } = await supabase
+      .from('usuarios_pj')
+      .update({
+        estado: 'rechazado',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userId);
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      message: 'Solicitud rechazada.'
+    });
+  } catch (err) {
+    console.error('Error rechazando usuario:', err);
+    res.status(500).json({ error: 'Error al rechazar solicitud.' });
+  }
+});
+
+router.get('/api/pastoral/usuarios/lista', requireAuth, async (req, res) => {
+  try {
+    const isGlobalAdmin = req.authUser.role === 'admin_diocesano';
+    let query = supabase
+      .from('usuarios_pj')
+      .select('id, usuario, nombre_completo, correo, telefono, pastoral_id, pastoral_nombre, parroquia, zona, rol, estado, created_at')
+      .order('created_at', { ascending: false });
+
+    if (!isGlobalAdmin) {
+      query = query.eq('pastoral_id', req.authUser.pastoralId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, usuarios: data || [] });
+  } catch (err) {
+    console.error('Error listando usuarios_pj:', err);
+    res.status(500).json({ error: 'Error al listar usuarios.' });
   }
 });
 

@@ -1,5 +1,10 @@
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 const { findUserById } = require('./db');
+
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
+  : null;
 
 const EPHEMERAL_SECRET = crypto.randomBytes(32).toString('hex');
 
@@ -74,7 +79,7 @@ function verifyToken(token) {
   }
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Sesión requerida. Inicia sesión para acceder al ERP.' });
@@ -87,9 +92,37 @@ function requireAuth(req, res, next) {
     return;
   }
 
-  const user = findUserById(payload.uid);
+  let user = findUserById(payload.uid);
+  if (!user && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('usuarios_pj')
+        .select('*')
+        .eq('id', payload.uid)
+        .limit(1);
+      if (!error && data && data.length > 0) {
+        const u = data[0];
+        user = {
+          id: u.id,
+          name: u.nombre_completo || u.usuario,
+          email: u.correo,
+          role: u.rol,
+          pastoralId: u.pastoral_id,
+          estado: u.estado
+        };
+      }
+    } catch (e) {
+      console.error('Error resolviendo usuario_pj en requireAuth:', e.message);
+    }
+  }
+
   if (!user) {
     res.status(401).json({ error: 'Usuario no encontrado o dado de baja.' });
+    return;
+  }
+
+  if (user.estado && user.estado !== 'activo') {
+    res.status(403).json({ error: 'Tu cuenta aún no está activa o ha sido suspendida.' });
     return;
   }
 

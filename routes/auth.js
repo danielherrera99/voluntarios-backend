@@ -1184,5 +1184,6 @@ router.put('/reset-password', authLimiter, async (req, res) => {
 
 router.requireAdmin = requireAdmin;
 router.requireAuth = requireAuth;
+router.sendRecoveryEmail = sendRecoveryEmail;
 
 module.exports = router;
