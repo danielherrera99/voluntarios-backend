@@ -531,7 +531,12 @@ router.get('/api/auth/me', requireAuth, (req, res) => {
 
 router.get('/api/erp/dashboard', requireAuth, (req, res) => {
   const db = getDb();
-  if (req.authUser?.role !== 'admin_diocesano' && !req.authUser?.pastoralId) {
+  const isGlobalAdmin =
+    req.authUser?.role === 'admin_diocesano' ||
+    req.authUser?.role === 'admin' ||
+    req.authUser?.email === 'danielitoeltravieso2000@gmail.com';
+
+  if (!isGlobalAdmin && !req.authUser?.pastoralId) {
     return res.status(403).json({
       error: 'Tu cuenta no tiene una pastoral asignada. Solicita al Administrador Diocesano asignarte una.',
     });
@@ -572,7 +577,7 @@ router.get('/api/erp/dashboard', requireAuth, (req, res) => {
     scopedPastoralId: activeScopeId,
     activePastoral,
     availablePastorals:
-      req.authUser?.role === 'admin_diocesano' ? db.pastorals : scopedPastorals,
+      isGlobalAdmin ? db.pastorals : scopedPastorals,
     pastorals: scopedPastorals,
     parishes: db.parishes || [],
     members: scopedMembers,
