@@ -95,7 +95,7 @@ router.get('/api/public/overview', (_req, res) => {
     title: 'Pastoral Juvenil P. San José Obrero',
     subtitle: '3 Años de servicio y entrega pastoral',
     dateLabel: '5 de noviembre',
-    parishOrRole: 'Zona Chiclayo Sur',
+    parishOrRole: 'Zona Centro-Oeste',
   });
 
   const payload = {
@@ -103,9 +103,10 @@ router.get('/api/public/overview', (_req, res) => {
       activePastorals: activePastorals.length,
       registeredMembers: db.members.length,
       upcomingEvents: publicEvents.filter((e) => e.status === 'Programado').length,
-      parishesReached: db.pastorals.reduce((acc, item) => Math.max(acc, item.parishCount), 0),
+      parishesReached: new Set(activePastorals.map((p) => p.zonaArciprestal || p.decanato)).size,
     },
     pastorals: db.pastorals,
+    parishes: db.parishes || [],
     events: publicEvents,
     celebrations,
   };
@@ -573,6 +574,7 @@ router.get('/api/erp/dashboard', requireAuth, (req, res) => {
     availablePastorals:
       req.authUser?.role === 'admin_diocesano' ? db.pastorals : scopedPastorals,
     pastorals: scopedPastorals,
+    parishes: db.parishes || [],
     members: scopedMembers,
     prospects: scopedProspects,
     events: scopedEvents,
