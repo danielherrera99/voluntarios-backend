@@ -824,31 +824,60 @@ router.put('/usuarios/:id/rol', requireAdmin, async (req, res) => {
 
 async function sendRecoveryEmail({ toEmail, toName, code }) {
   const htmlContent = `
-    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e7e5e4; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06);">
-      <div style="background: linear-gradient(135deg, #851C1D 0%, #5B1314 100%); padding: 30px 20px; text-align: center; color: white;">
-        <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.5px;">Diócesis de Chiclayo</h2>
-        <p style="margin: 6px 0 0 0; font-size: 13px; color: #fde68a;">Comisión Diocesana de Voluntariado</p>
-      </div>
-      <div style="padding: 30px 24px; color: #292524;">
-        <h3 style="margin-top: 0; color: #1c1917; font-size: 18px;">Restablecer tu Contraseña</h3>
-        <p style="font-size: 14px; line-height: 1.6; color: #57534e;">
-          Hola <strong>${toName}</strong>,
-        </p>
-        <p style="font-size: 14px; line-height: 1.6; color: #57534e;">
-          Has solicitado restablecer la contraseña de tu cuenta en la plataforma de Voluntariado. Utiliza el siguiente código de verificación de 6 dígitos para continuar:
-        </p>
-        <div style="background: #fafaf9; border: 2px dashed #f59e0b; border-radius: 12px; padding: 18px; margin: 24px 0; text-align: center;">
-          <span style="font-family: monospace, Courier; font-size: 32px; font-weight: 800; letter-spacing: 10px; color: #851C1D;">${code}</span>
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 24px auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(10, 110, 180, 0.08);">
+      <div style="background: linear-gradient(135deg, #0A6EB4 0%, #03487A 100%); padding: 36px 24px 30px; text-align: center; color: #ffffff;">
+        <div style="display: inline-block; padding: 4px 14px; background: rgba(255, 255, 255, 0.18); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #ffffff; margin-bottom: 12px;">
+          Diócesis de Chiclayo
         </div>
-        <p style="font-size: 13px; color: #78716c; line-height: 1.5;">
-          ⏳ Este código es de un solo uso y expirará en <strong>15 minutos</strong>.
-        </p>
-        <p style="font-size: 13px; color: #78716c; line-height: 1.5; margin-bottom: 0;">
-          Si tú no realizaste esta solicitud, puedes ignorar este mensaje de manera segura. Tu contraseña permanecerá intacta hasta que se verifique este código.
+        <h2 style="margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.3px; color: #ffffff;">
+          Pastoral Juvenil
+        </h2>
+        <p style="margin: 6px 0 0 0; font-size: 13px; color: #bae6fd; font-weight: 500;">
+          Comisión Diocesana de Juventud · Lambayeque & Santa Cruz
         </p>
       </div>
-      <div style="background-color: #fafaf9; border-top: 1px solid #e7e5e4; padding: 16px 20px; text-align: center; font-size: 11px; color: #a8a29e;">
-        © 2026 Diócesis de Chiclayo • Sistema Oficial de Gestión del Voluntariado
+
+      <div style="padding: 34px 28px; color: #1e293b;">
+        <h3 style="margin-top: 0; margin-bottom: 16px; color: #0f172a; font-size: 18px; font-weight: 700;">
+          Restablecer tu Contraseña
+        </h3>
+        <p style="font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 14px 0;">
+          Paz y Bien, <strong style="color: #0A6EB4;">${toName}</strong> 🕊️
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 24px 0;">
+          Has solicitado restablecer la contraseña de acceso a tu cuenta en la plataforma diocesana. Utiliza el siguiente código de verificación de 6 dígitos para continuar:
+        </p>
+
+        <div style="background: linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 100%); border: 1.5px solid #7dd3fc; border-radius: 16px; padding: 22px 16px; margin: 24px 0; text-align: center;">
+          <span style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #0369a1; margin-bottom: 8px;">
+            Código de Verificación
+          </span>
+          <div style="font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #0284c7; text-indent: 12px; margin: 6px 0;">
+            ${code}
+          </div>
+          <span style="display: block; font-size: 12px; color: #64748b; margin-top: 6px;">
+            Válido durante los próximos <strong>15 minutos</strong>
+          </span>
+        </div>
+
+        <div style="background-color: #f8fafc; border-left: 4px solid #0A6EB4; border-radius: 8px; padding: 14px 16px; margin: 24px 0 20px;">
+          <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #334155;">
+            <strong>🔒 Por tu seguridad:</strong> Si no realizaste esta solicitud, puedes ignorar este mensaje con total tranquilidad. Tu cuenta permanece protegida y no se aplicará ningún cambio sin este código.
+          </p>
+        </div>
+
+        <p style="font-size: 12px; line-height: 1.5; color: #94a3b8; margin: 16px 0 0; text-align: center;">
+          Por favor, no compartas este código con nadie. El equipo diocesano nunca solicitará tus credenciales.
+        </p>
+      </div>
+
+      <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; font-size: 11.5px; color: #94a3b8;">
+        <p style="margin: 0 0 4px; font-weight: 600; color: #64748b;">
+          Pastoral Juvenil • Diócesis de Chiclayo
+        </p>
+        <p style="margin: 0; color: #94a3b8;">
+          Obispado de Chiclayo • Lambayeque, Perú • <em>"Caminando juntos en la esperanza"</em>
+        </p>
       </div>
     </div>
   `;
@@ -865,11 +894,11 @@ async function sendRecoveryEmail({ toEmail, toName, code }) {
         },
         body: JSON.stringify({
           sender: {
-            name: 'Voluntariado Diócesis de Chiclayo',
+            name: 'Pastoral Juvenil · Diócesis de Chiclayo',
             email: process.env.EMAIL_USER || 'jufrapomalca@gmail.com'
           },
           to: [{ email: toEmail, name: toName }],
-          subject: 'Código de Recuperación de Contraseña - Voluntariado Diócesis de Chiclayo',
+          subject: `${code} es tu código de verificación · Pastoral Juvenil Chiclayo`,
           htmlContent
         })
       });
@@ -900,9 +929,9 @@ async function sendRecoveryEmail({ toEmail, toName, code }) {
       });
 
       await transporter.sendMail({
-        from: `"Voluntariado Diócesis de Chiclayo" <${process.env.EMAIL_USER}>`,
+        from: `"Pastoral Juvenil · Diócesis de Chiclayo" <${process.env.EMAIL_USER}>`,
         to: toEmail,
-        subject: 'Código de Recuperación de Contraseña - Voluntariado Diócesis de Chiclayo',
+        subject: `${code} es tu código de verificación · Pastoral Juvenil Chiclayo`,
         html: htmlContent
       });
 
